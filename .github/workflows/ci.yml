@@ -31,11 +31,7 @@ jobs:
           print(f"Validated {len(files)} YAML file(s)")
           EOF
 
-      - name: Set up Go
-        if: hashFiles('go.mod') != ''
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
+      - uses: jdx/mise-action@v2
 
       - name: Go vet and test
         if: hashFiles('go.mod') != ''
