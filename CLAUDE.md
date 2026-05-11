@@ -213,6 +213,7 @@ Documentation is a first-class concern in this project. The Architect LLM makes 
 
 ### What must always be documented
 
+- **README.md**: Must reflect the current state of the project — setup steps, commands, and status. Update it in any PR that changes how the project is set up, used, or structured. It is the entry point for humans and future agents discovering the repo.
 - **Architectural decisions**: Any time a meaningful design choice is made (why a component exists, why one approach was chosen over another, what constraints it operates under), it goes into `docs/architecture.md`. The Architect needs this as a reliable reference.
 - **Skill bundles**: Every bundle in `/skills/` must have a clear `context_pack` that explains its purpose and constraints. A worker getting a skill bundle should understand what it can and cannot do from the bundle alone.
 - **Security invariants**: Any security constraint or trust boundary must be written explicitly — not implied by code structure.
@@ -227,7 +228,11 @@ Documentation is a first-class concern in this project. The Architect LLM makes 
 
 ### Updating docs
 
-When architectural decisions change, `docs/architecture.md` must be updated in the same PR as the change. Stale architecture docs are worse than no docs — the Architect will make decisions based on outdated information.
+When architectural decisions change, `docs/architecture.md` must be updated in the same PR as the change. When user-facing behavior changes (new commands, new setup steps, status changes), `README.md` must be updated in the same PR. Stale docs are worse than no docs — the Architect and future agents will make decisions based on whatever is written down.
+
+### Future: Documentation Agent
+
+As the system matures, the intent is to create a dedicated **Documentation Agent** persona — a skill bundle that specializes in reviewing PRs for documentation completeness, flagging missing README or architecture doc updates, and keeping the docs consistent with the code. Until then, the PR checklist (`.github/pull_request_template.md`) is the enforcement mechanism.
 
 ---
 
