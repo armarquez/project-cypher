@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate YAML
+        run: |
+          python3 - <<'EOF'
+          import yaml, pathlib, sys
+          errors = []
+          files = [p for p in pathlib.Path('.').rglob('*')
+                   if '.git' not in p.parts and p.suffix in ('.yaml', '.yml')]
+          for p in files:
+              try:
+                  yaml.safe_load(p.read_text())
+              except yaml.YAMLError as e:
+                  errors.append(f"{p}: {e}")
+          if errors:
+              for e in errors:
+                  print(f"INVALID: {e}")
+              sys.exit(1)
+          print(f"Validated {len(files)} YAML file(s)")
+          EOF
+
+      - name: Set up Go
+        if: hashFiles('go.mod') != ''
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Go vet and test
+        if: hashFiles('go.mod') != ''
+        run: |
+          go vet ./...
+          go test ./...
