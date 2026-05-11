@@ -1,0 +1,9 @@
+target_repo: https://github.com/org/repo-name
+worker_model: gemini/gemini-2.0-flash
+architect_model: anthropic/claude-sonnet-4-5
+test_command: go test ./...
+skills:
+  - git-operations
+  - github-pr
+  - go-testing
+design_constraints: "No global state; all functions must be unit-testable."
