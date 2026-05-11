@@ -21,27 +21,33 @@ For Go specifically: idiomatic error wrapping (`fmt.Errorf("context: %w", err)`)
 
 ---
 
-## Toolchain Management (mise)
+## Toolchain Management (mise + Just)
 
-**mise** is the primary tool manager for this project. It pins exact versions of all language runtimes and CLI tools so that local dev and CI use identical environments.
+**mise** pins exact versions of all language runtimes and CLI tools. **Just** is the command runner that documents and standardizes how you interact with the project. Both are first-class citizens.
 
 ```bash
-mise install        # install all tools pinned in .mise.toml (run after cloning)
-mise use go@1.24.6  # update the pinned Go version in .mise.toml
+mise install   # install all tools from .mise.toml (run once after cloning)
+just --list    # show all available recipes
 ```
 
-`.mise.toml` at the repo root is the single source of truth for tool versions. When adding a new language runtime or CLI tool to the project, add it here first. CI reads `.mise.toml` via `jdx/mise-action`.
+`.mise.toml` is the single source of truth for tool versions (currently Go and Just). When adding any new language runtime or CLI tool, pin it in `.mise.toml` first — this keeps CI and all developer environments in sync. CI reads `.mise.toml` via `jdx/mise-action`.
 
 ---
 
 ## Key Commands
 
+**Just** is the primary command interface. Run `just --list` to see all recipes.
+
 ```bash
-go build ./...   # build all packages
-go vet ./...     # static analysis
-go test ./...    # run all tests
-go test ./internal/config/... -v   # run a single package's tests verbosely
+just build              # compile all packages
+just check              # vet + test — run this before every push
+just test               # run all tests
+just test-pkg config    # run a single package's tests verbosely (replace 'config' with package name)
+just vet                # static analysis only
+just run                # build and run the cypher binary
 ```
+
+Add new recipes to `justfile` when you find yourself running the same multi-step command more than once. Recipes serve as living documentation of how to operate the project.
 
 ---
 
