@@ -1,0 +1,7 @@
+# compiled binaries
+cypher
+/bin/
+
+# local project configs (real values, not examples)
+configs/*.yaml
+!configs/example.yaml

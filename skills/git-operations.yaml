@@ -1,0 +1,23 @@
+name: git-operations
+context_pack: |
+  You have access to git tools for reading repository state and staging changes.
+  Never force-push. Never commit directly to main. All changes go through a PR.
+tools:
+  - name: git_status
+    description: "Show the working tree status of the sandbox repository"
+    parameters: {}
+    impl: sandbox_exec
+  - name: git_diff
+    description: "Show changes between commits, working tree, or staged files"
+    parameters:
+      staged:
+        type: boolean
+        description: "If true, show staged changes only"
+    impl: sandbox_exec
+  - name: git_add
+    description: "Stage file changes for commit"
+    parameters:
+      paths:
+        type: string
+        description: "Space-separated list of paths to stage"
+    impl: sandbox_exec
