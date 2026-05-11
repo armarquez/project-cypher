@@ -26,7 +26,7 @@ func mockVendor(t *testing.T, replyStatus int, replyBody string) (*httptest.Serv
 
 func buildRouter(t *testing.T, overrides map[Vendor]string) *Router {
 	t.Helper()
-	return NewRouter(http.DefaultClient, overrides)
+	return NewRouter(http.DefaultClient, overrides, nil)
 }
 
 func doRequest(t *testing.T, router *Router, model string) *http.Response {

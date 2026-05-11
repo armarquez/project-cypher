@@ -36,13 +36,14 @@ var hopByHopHeaders = []string{
 // Router proxies inbound LLM requests to the correct vendor endpoint based
 // on the model field in the request body.
 type Router struct {
-	client    *http.Client
-	endpoints map[Vendor]string
+	client      *http.Client
+	endpoints   map[Vendor]string
+	credentials *CredentialStore // nil = no injection
 }
 
-// NewRouter creates a Router using the provided HTTP client and default
-// vendor endpoints. Pass endpoint overrides to redirect traffic in tests.
-func NewRouter(client *http.Client, overrides map[Vendor]string) *Router {
+// NewRouter creates a Router using the provided HTTP client, optional endpoint
+// overrides (for tests), and an optional CredentialStore (nil = no injection).
+func NewRouter(client *http.Client, overrides map[Vendor]string, creds *CredentialStore) *Router {
 	endpoints := make(map[Vendor]string, len(defaultEndpoints))
 	for k, v := range defaultEndpoints {
 		endpoints[k] = v
@@ -50,7 +51,7 @@ func NewRouter(client *http.Client, overrides map[Vendor]string) *Router {
 	for k, v := range overrides {
 		endpoints[k] = v
 	}
-	return &Router{client: client, endpoints: endpoints}
+	return &Router{client: client, endpoints: endpoints, credentials: creds}
 }
 
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
@@ -80,6 +81,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 
 	copyHeaders(outbound.Header, req.Header)
+	r.credentials.Inject(vendor, outbound.Header)
 
 	resp, err := r.client.Do(outbound)
 	if err != nil {
