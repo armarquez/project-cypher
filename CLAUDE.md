@@ -10,6 +10,41 @@ The full architectural sketch is in `docs/architecture.md`, but treat it as a st
 
 ---
 
+## Engineering Principles
+
+**Best practices over velocity.** We optimize for long-term maintainability and correctness, not for getting things done fast. This means:
+- Follow idiomatic conventions for the language/framework in use — don't invent patterns when the ecosystem already has one
+- Prefer explicit, readable code over clever code
+- Do not skip steps (validation, error handling at system boundaries, tests) to ship faster
+
+For Go specifically: idiomatic error wrapping (`fmt.Errorf("context: %w", err)`), table-driven tests, no global state, package-level types that are self-documenting. Do not use `init()` functions or `panic` except in `main`.
+
+---
+
+## Toolchain Management (mise)
+
+**mise** is the primary tool manager for this project. It pins exact versions of all language runtimes and CLI tools so that local dev and CI use identical environments.
+
+```bash
+mise install        # install all tools pinned in .mise.toml (run after cloning)
+mise use go@1.24.6  # update the pinned Go version in .mise.toml
+```
+
+`.mise.toml` at the repo root is the single source of truth for tool versions. When adding a new language runtime or CLI tool to the project, add it here first. CI reads `.mise.toml` via `jdx/mise-action`.
+
+---
+
+## Key Commands
+
+```bash
+go build ./...   # build all packages
+go vet ./...     # static analysis
+go test ./...    # run all tests
+go test ./internal/config/... -v   # run a single package's tests verbosely
+```
+
+---
+
 ## Branch and PR Workflow
 
 **Never commit directly to `main`.** All work goes through a short-lived branch and a PR. Main is protected by a GitHub Ruleset that requires:
