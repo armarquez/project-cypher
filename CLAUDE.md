@@ -51,6 +51,30 @@ Add new recipes to `justfile` when you find yourself running the same multi-step
 
 ---
 
+## GitHub Issues Workflow
+
+**All work and all follow-up items must be tracked as GitHub issues.** This includes tasks being implemented immediately, future backlog items, and anything surfaced mid-conversation that isn't acted on right now.
+
+```bash
+gh issue create --title "..." --body "..."   # create an issue
+gh issue list                                 # see open issues
+gh issue close <number>                       # close when work is merged
+```
+
+### When to create an issue immediately
+
+- Before implementing any task — create the issue first, then start the branch
+- When a "Future:" or "TODO:" or "we should eventually..." item comes up in conversation or review — open the issue before moving on, even if it won't be worked on for weeks
+- When a PR review surfaces follow-up work — open the issue in the same session, don't rely on memory
+
+### Why this matters
+
+Issues are the resumable checkpoint for this project. If a session is interrupted or a future agent picks up the work, open issues show exactly what was decided and what's left. A decision that exists only in conversation history is effectively lost.
+
+Close each issue immediately when its corresponding PR is merged — not in bulk later.
+
+---
+
 ## Branch and PR Workflow
 
 **Never commit directly to `main`.** All work goes through a short-lived branch and a PR. Main is protected by a GitHub Ruleset that requires:
@@ -230,7 +254,7 @@ Documentation is a first-class concern in this project. The Architect LLM makes 
 
 When architectural decisions change, `docs/architecture.md` must be updated in the same PR as the change. When user-facing behavior changes (new commands, new setup steps, status changes), `README.md` must be updated in the same PR. Stale docs are worse than no docs — the Architect and future agents will make decisions based on whatever is written down.
 
-### Future: Documentation Agent
+### Future: Documentation Agent (Issue #13)
 
 As the system matures, the intent is to create a dedicated **Documentation Agent** persona — a skill bundle that specializes in reviewing PRs for documentation completeness, flagging missing README or architecture doc updates, and keeping the docs consistent with the code. Until then, the PR checklist (`.github/pull_request_template.md`) is the enforcement mechanism.
 
