@@ -33,8 +33,6 @@ jobs:
 
       - uses: jdx/mise-action@v2
 
-      - name: Go vet and test
+      - name: Check
         if: hashFiles('go.mod') != ''
-        run: |
-          go vet ./...
-          go test ./...
+        run: just check
