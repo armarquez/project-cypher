@@ -36,15 +36,18 @@ just --list    # show all available recipes
 
 ## Key Commands
 
-**Just** is the primary command interface. Run `just --list` to see all recipes.
+**Just** is the primary command interface. Running `just` with no arguments lists all available recipes. A local `.env` file is loaded automatically if present — use it for secrets like `CYPHER_GITHUB_TOKEN` rather than exporting them in your shell.
 
 ```bash
+just                    # list all recipes (default)
 just build              # compile all packages
-just check              # vet + test — run this before every push
+just check              # vet + test — required before every push
 just test               # run all tests
 just test-pkg config    # run a single package's tests verbosely (replace 'config' with package name)
 just vet                # static analysis only
-just run                # build and run the cypher binary
+just coverage           # tests + function-level coverage report
+just run-once           # process next open cypher issue (requires CYPHER_GITHUB_TOKEN)
+just run-loop           # continuous orchestrator loop (requires CYPHER_GITHUB_TOKEN)
 ```
 
 Add new recipes to `justfile` when you find yourself running the same multi-step command more than once. Recipes serve as living documentation of how to operate the project.
