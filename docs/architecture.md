@@ -118,6 +118,35 @@ tools:
 
 The same bundle works whether the worker is Gemini, a local Llama, or anything else. Vendor format conversion is entirely the Control Plane's responsibility.
 
+### Bundle Personas
+
+Bundles are not limited to implementation workers. The same system supports **reviewer personas** that run at Architect tier and inspect PRs rather than write code. The distinction matters for how the Control Plane routes and assembles the session:
+
+| Persona type | Model tier | Triggered by | Example bundles |
+|---|---|---|---|
+| **Worker** | Gemini / Local LLM | Orchestrator dispatching a task issue | `git-operations`, `github-pr`, `go-testing` |
+| **Reviewer** | Claude Sonnet/Opus | PR opened or updated webhook | `documentation-agent` |
+
+Reviewer bundles share the same YAML format. They differ only in their `context_pack` (no implementation instructions) and tool set (read/comment tools rather than write/exec tools).
+
+The **Documentation Agent** (`skills/documentation-agent.yaml`) is the first reviewer persona. It checks every PR for: README freshness, architecture doc updates (including C4 diagrams), skill bundle context_pack completeness, and HITL decision trail. It posts a single structured comment and does not merge or block beyond documentation gaps.
+
+## Diagram Standards
+
+All diagrams in this project use **MermaidJS** rendered inside fenced code blocks. ASCII art is not permitted. Use `<br />` for line breaks inside Mermaid node labels — not `\n`.
+
+Architecture diagrams follow the **C4 model** (https://c4model.com/) using Mermaid's built-in C4 syntax (`C4Context`, `C4Container`, `C4Component`). The tooling choice is Mermaid C4 over Structurizr: it renders natively in GitHub markdown, requires no external service, and is consistent with the project's existing MermaidJS usage.
+
+Required diagram levels:
+
+| Change type | Required C4 level |
+|---|---|
+| New external actor or system dependency | Context (L1) |
+| New container, process, or service | Container (L2) |
+| Complex internal structure worth documenting | Component (L3) — optional |
+
+The Documentation Agent enforces diagram presence as a hard requirement, not a suggestion.
+
 ### Bundle Assembly
 
 The Control Plane assembles per session:

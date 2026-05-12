@@ -242,6 +242,7 @@ Documentation is a first-class concern in this project. The Architect LLM makes 
 
 - **README.md**: Must reflect the current state of the project — setup steps, commands, and status. Update it in any PR that changes how the project is set up, used, or structured. It is the entry point for humans and future agents discovering the repo.
 - **Architectural decisions**: Any time a meaningful design choice is made (why a component exists, why one approach was chosen over another, what constraints it operates under), it goes into `docs/architecture.md`. The Architect needs this as a reliable reference.
+- **Diagrams**: All diagrams use **MermaidJS** (never ASCII art, never PlantUML). This applies to every diagram type — sequence diagrams, flowcharts, state machines, and C4 architecture diagrams. Use `<br />` for line breaks inside Mermaid node labels, not `\n`. When prose alone is insufficient to explain a flow or interaction, add an inline Mermaid diagram. Architecture diagrams follow the **C4 model** using Mermaid's built-in C4 syntax (`C4Context`, `C4Container`, `C4Component`). A new component or container requires a C4 Container diagram; a new external actor requires a C4 Context diagram. See `docs/architecture.md` for diagram standards and tooling rationale.
 - **Skill bundles**: Every bundle in `/skills/` must have a clear `context_pack` that explains its purpose and constraints. A worker getting a skill bundle should understand what it can and cannot do from the bundle alone.
 - **Security invariants**: Any security constraint or trust boundary must be written explicitly — not implied by code structure.
 - **HITL decisions**: When a human makes a HITL decision (adopt/fork/build, approve/reject a dep), that decision and its rationale get recorded in the relevant GitHub issue or PR. This builds institutional memory the Architect can reference.
@@ -257,9 +258,9 @@ Documentation is a first-class concern in this project. The Architect LLM makes 
 
 When architectural decisions change, `docs/architecture.md` must be updated in the same PR as the change. When user-facing behavior changes (new commands, new setup steps, status changes), `README.md` must be updated in the same PR. Stale docs are worse than no docs — the Architect and future agents will make decisions based on whatever is written down.
 
-### Future: Documentation Agent (Issue #13)
+### Documentation Agent
 
-As the system matures, the intent is to create a dedicated **Documentation Agent** persona — a skill bundle that specializes in reviewing PRs for documentation completeness, flagging missing README or architecture doc updates, and keeping the docs consistent with the code. Until then, the PR checklist (`.github/pull_request_template.md`) is the enforcement mechanism.
+The **Documentation Agent** (`skills/documentation-agent.yaml`) is a reviewer persona that checks every PR for documentation completeness: README freshness, architecture doc updates, C4 diagram presence, skill bundle context_pack quality, and HITL decision trail. It runs at Architect tier and posts a single structured PASS / NEEDS WORK comment. The PR checklist (`.github/pull_request_template.md`) remains the manual enforcement mechanism until the agent is wired into the PR webhook flow.
 
 ---
 
