@@ -25,6 +25,14 @@ coverage:
     go test -coverprofile=coverage.out ./...
     go tool cover -func=coverage.out
 
-# Build and run the cypher binary
+# Run orchestrator once against the project-cypher config (requires CYPHER_GITHUB_TOKEN)
+run-once:
+    go run ./cmd/cypher --config configs/project-cypher.yaml
+
+# Run orchestrator in continuous loop (requires CYPHER_GITHUB_TOKEN)
+run-loop:
+    go run ./cmd/cypher --config configs/project-cypher.yaml --loop
+
+# Build and run the cypher binary with arbitrary args
 run *ARGS:
     go run ./cmd/cypher {{ARGS}}

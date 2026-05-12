@@ -1,0 +1,12 @@
+target_repo: https://github.com/armarquez/project-cypher
+worker_model: gemini/gemini-2.0-flash
+architect_model: anthropic/claude-sonnet-4-6
+test_command: just check
+skills:
+  - git-operations
+  - github-pr
+  - go-testing
+design_constraints: >
+  Follow idiomatic Go. No global state. Table-driven tests where applicable.
+  Best practices over velocity — optimize for long-term maintainability.
+  No panic except in main. Idiomatic error wrapping with fmt.Errorf("context: %w", err).
