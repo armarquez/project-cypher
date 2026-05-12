@@ -5,3 +5,6 @@ cypher
 # local project configs (real values, not examples)
 configs/*.yaml
 !configs/example.yaml
+
+# test coverage artifacts
+coverage.out

@@ -36,3 +36,15 @@ jobs:
       - name: Check
         if: hashFiles('go.mod') != ''
         run: just check
+
+      - name: Coverage
+        if: hashFiles('go.mod') != ''
+        run: |
+          go test -coverprofile=coverage.out ./...
+          go tool cover -func=coverage.out
+          COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | tr -d '%')
+          if [ "${COVERAGE%.*}" -lt 80 ]; then
+            echo "Coverage ${COVERAGE}% is below the 80% threshold"
+            exit 1
+          fi
+          echo "Coverage: ${COVERAGE}%"
