@@ -20,6 +20,11 @@ vet:
 # Run vet + tests — use this before pushing
 check: vet test
 
+# Run tests with coverage report (use just coverage in CI or before a PR)
+coverage:
+    go test -coverprofile=coverage.out ./...
+    go tool cover -func=coverage.out
+
 # Build and run the cypher binary
 run *ARGS:
     go run ./cmd/cypher {{ARGS}}
