@@ -1,10 +1,11 @@
 # compiled binaries
-cypher
+/cypher
 /bin/
 
 # local project configs (real values, not examples)
 configs/*.yaml
 !configs/example.yaml
+!configs/project-cypher.yaml
 
 # test coverage artifacts
 coverage.out
