@@ -22,6 +22,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/armarquez/project-cypher/internal/config"
 )
 
 // Config is all the inputs Run needs.
@@ -38,6 +40,9 @@ type Config struct {
 	Client *http.Client
 	// Stdout receives progress output (defaults to os.Stdout).
 	Stdout io.Writer
+	// OnServerReady is called once the local callback server is listening.
+	// The port is passed so callers (e.g. tests) can trigger the callback directly.
+	OnServerReady func(port int)
 }
 
 func (c *Config) apiBase() string {
@@ -290,7 +295,7 @@ func updateEnvFile(path string, updates map[string]string) error {
 
 // Run executes the full setup flow: manifest → callback → exchange → install → write.
 func Run(ctx context.Context, cfg Config) error {
-	owner, repo, err := parseOwnerRepo(cfg.TargetRepo)
+	owner, repo, err := config.ParseRepo(cfg.TargetRepo)
 	if err != nil {
 		return err
 	}
@@ -327,6 +332,10 @@ func Run(ctx context.Context, cfg Config) error {
 	srv := &http.Server{Handler: mux}
 	go srv.Serve(ln) //nolint:errcheck
 	defer srv.Shutdown(ctx) //nolint:errcheck
+
+	if cfg.OnServerReady != nil {
+		go cfg.OnServerReady(port)
+	}
 
 	// Step 2: Open browser.
 	localURL := fmt.Sprintf("http://localhost:%d/", port)
@@ -409,17 +418,6 @@ func Run(ctx context.Context, cfg Config) error {
 	fmt.Fprintf(out, "Run `cypher doctor` to verify your environment.\n")
 
 	return nil
-}
-
-func parseOwnerRepo(targetRepo string) (owner, repo string, err error) {
-	s := strings.TrimPrefix(targetRepo, "https://github.com/")
-	s = strings.TrimPrefix(s, "http://github.com/")
-	s = strings.TrimSuffix(s, ".git")
-	parts := strings.SplitN(s, "/", 2)
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return "", "", fmt.Errorf("cannot parse %q as owner/repo", targetRepo)
-	}
-	return parts[0], parts[1], nil
 }
 
 func randomHex(n int) (string, error) {

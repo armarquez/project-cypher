@@ -4,14 +4,19 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // --- GenerateManifest ---
@@ -255,5 +260,176 @@ func TestPollInstallation_ContextCancelled(t *testing.T) {
 	_, err := PollInstallation(ctx, s.Client(), s.URL, "tok", "org")
 	if err == nil {
 		t.Fatal("expected error for server error or cancelled context")
+	}
+}
+
+// --- Config methods ---
+
+func TestConfig_Defaults(t *testing.T) {
+	cfg := Config{}
+	if cfg.apiBase() != "https://api.github.com" {
+		t.Errorf("apiBase() = %q", cfg.apiBase())
+	}
+	if cfg.client() == nil {
+		t.Error("client() should return non-nil default client")
+	}
+	if cfg.stdout() == nil {
+		t.Error("stdout() should return non-nil writer")
+	}
+}
+
+func TestConfig_Overrides(t *testing.T) {
+	var buf strings.Builder
+	cli := &http.Client{Timeout: 1 * time.Second}
+	cfg := Config{
+		APIBase: "http://example.com",
+		Client:  cli,
+		Stdout:  &buf,
+	}
+	if cfg.apiBase() != "http://example.com" {
+		t.Errorf("apiBase() = %q", cfg.apiBase())
+	}
+	if cfg.client() != cli {
+		t.Error("client() should return the injected client")
+	}
+	if cfg.stdout() != &buf {
+		t.Error("stdout() should return the injected writer")
+	}
+}
+
+// --- randomHex ---
+
+func TestRandomHex(t *testing.T) {
+	h, err := randomHex(16)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(h) != 32 {
+		t.Errorf("expected 32 hex chars, got %d: %q", len(h), h)
+	}
+	for _, c := range h {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			t.Errorf("non-hex character %q in output", c)
+		}
+	}
+}
+
+// --- autoSubmitPage / successPage ---
+
+func TestAutoSubmitPage(t *testing.T) {
+	page := autoSubmitPage(`{"name":"test"}`, "mystate")
+	if !strings.Contains(page, "mystate") {
+		t.Error("expected state in auto-submit page")
+	}
+	if !strings.Contains(page, `{"name":"test"}`) {
+		t.Error("expected manifest JSON in auto-submit page")
+	}
+	if !strings.Contains(page, "github.com/settings/apps/new") {
+		t.Error("expected GitHub URL in auto-submit page")
+	}
+}
+
+func TestSuccessPage(t *testing.T) {
+	page := successPage()
+	if !strings.Contains(page, "successfully") {
+		t.Error("expected success message in page")
+	}
+}
+
+// --- Run (end-to-end) ---
+
+func TestRun_EndToEnd(t *testing.T) {
+	// Generate a real RSA key for the fake exchange response.
+	privKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate RSA key: %v", err)
+	}
+	pemBytes := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(privKey),
+	})
+
+	// Fake GitHub API server.
+	fakeAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/app-manifests/"):
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
+				"id":   float64(999),
+				"slug": "cypher-testorg-testrepo",
+				"pem":  string(pemBytes),
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/app/installations":
+			json.NewEncoder(w).Encode([]map[string]interface{}{ //nolint:errcheck
+				{"id": float64(777), "account": map[string]string{"login": "testorg"}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer fakeAPI.Close()
+
+	dir := t.TempDir()
+	var stdout strings.Builder
+
+	cfg := Config{
+		TargetRepo: "https://github.com/testorg/testrepo",
+		EnvPath:    filepath.Join(dir, ".env"),
+		CypherDir:  filepath.Join(dir, ".cypher"),
+		APIBase:    fakeAPI.URL,
+		Client:     fakeAPI.Client(),
+		Stdout:     &stdout,
+		OnServerReady: func(port int) {
+			// Simulate GitHub's redirect back to the callback.
+			time.Sleep(20 * time.Millisecond)
+			resp, err := http.Get(fmt.Sprintf("http://localhost:%d/callback?code=testcode&state=ok", port))
+			if err == nil {
+				io.Copy(io.Discard, resp.Body) //nolint:errcheck
+				resp.Body.Close()
+			}
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := Run(ctx, cfg); err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	// Verify .env was written.
+	envData, err := os.ReadFile(cfg.EnvPath)
+	if err != nil {
+		t.Fatalf("read .env: %v", err)
+	}
+	env := string(envData)
+	if !strings.Contains(env, "CYPHER_GH_APP_ID=999") {
+		t.Errorf(".env missing CYPHER_GH_APP_ID=999:\n%s", env)
+	}
+	if !strings.Contains(env, "CYPHER_GH_INSTALLATION_ID=777") {
+		t.Errorf(".env missing CYPHER_GH_INSTALLATION_ID=777:\n%s", env)
+	}
+
+	// Verify PEM was written.
+	pemPath := filepath.Join(dir, ".cypher", "app-key.pem")
+	if _, err := os.Stat(pemPath); err != nil {
+		t.Errorf("PEM file not found: %v", err)
+	}
+
+	// Verify progress output.
+	out := stdout.String()
+	if !strings.Contains(out, "App created") {
+		t.Errorf("expected 'App created' in output:\n%s", out)
+	}
+	if !strings.Contains(out, "Installed") {
+		t.Errorf("expected 'Installed' in output:\n%s", out)
+	}
+}
+
+func TestRun_InvalidTargetRepo(t *testing.T) {
+	cfg := Config{TargetRepo: "not-a-repo"}
+	err := Run(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("expected error for invalid target_repo")
 	}
 }
