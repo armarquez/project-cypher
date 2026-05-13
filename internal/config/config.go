@@ -79,24 +79,68 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-func (c *Config) validate() error {
-	required := []struct {
-		name  string
-		value string
-	}{
-		{"target_repo", c.TargetRepo},
-		{"worker_model", c.WorkerModel},
-		{"architect_model", c.ArchitectModel},
-		{"test_command", c.TestCommand},
+type fieldError struct {
+	field   string
+	problem string
+	example string
+	hint    string
+}
+
+func (e fieldError) Error() string {
+	msg := fmt.Sprintf("%s: %s", e.field, e.problem)
+	if e.example != "" {
+		msg += fmt.Sprintf("\n  expected: %s", e.example)
 	}
-	for _, f := range required {
-		if f.value == "" {
-			return fmt.Errorf("missing required field: %s", f.name)
+	if e.hint != "" {
+		msg += fmt.Sprintf("\n  hint: %s", e.hint)
+	}
+	return msg
+}
+
+func (c *Config) validate() error {
+	required := []fieldError{
+		{
+			field:   "target_repo",
+			problem: "required — the GitHub URL of the repository Cypher will work on",
+			example: "https://github.com/owner/repo",
+			hint:    "set target_repo in your config file",
+		},
+		{
+			field:   "worker_model",
+			problem: "required — the LLM used for implementation tasks (primary worker tier)",
+			example: "gemini/gemini-2.0-flash",
+			hint:    "use a gemini/, openai/, or ollama/ prefixed model name",
+		},
+		{
+			field:   "architect_model",
+			problem: "required — the LLM used for architecture review and HITL classification (Architect tier)",
+			example: "anthropic/claude-sonnet-4-6",
+			hint:    "use an anthropic/ prefixed model; the Architect tier is reserved for Claude",
+		},
+		{
+			field:   "test_command",
+			problem: "required — the command the worker runs to verify changes",
+			example: "just check",
+			hint:    "use any shell command: go test ./..., make test, just check, etc.",
+		},
+	}
+
+	values := []string{c.TargetRepo, c.WorkerModel, c.ArchitectModel, c.TestCommand}
+	for i, fe := range required {
+		if values[i] == "" {
+			return &fe
 		}
 	}
+
 	if len(c.Skills) == 0 {
-		return fmt.Errorf("missing required field: skills (must list at least one skill bundle)")
+		return &fieldError{
+			field:   "skills",
+			problem: "required — list at least one skill bundle to give the worker its capabilities",
+			example: "[git-operations, github-pr, go-testing]",
+			hint:    "run `ls skills/` to see available bundles",
+		}
 	}
+
 	if len(c.Guardrails) == 0 {
 		c.Guardrails = StandardGuardrails
 	}
