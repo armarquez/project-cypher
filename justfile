@@ -32,6 +32,10 @@ coverage:
     go test -coverprofile=coverage.out ./...
     go tool cover -func=coverage.out
 
+# Validate a project config file (default: configs/project-cypher.yaml)
+validate CONFIG="configs/project-cypher.yaml":
+    go run ./cmd/cypher validate --config {{CONFIG}}
+
 # Process the next open cypher-labelled issue and exit (requires CYPHER_GITHUB_TOKEN)
 run-once:
     go run ./cmd/cypher --config configs/project-cypher.yaml
