@@ -1,0 +1,81 @@
+name: github-pr
+context_pack: |
+  You have access to GitHub Pull Request tools for creating PRs, checking CI
+  status, and posting comments. You do NOT have access to merge PRs — merging
+  is always a human or HITL-approved action.
+
+  ## What you can do
+
+  - Create a pull request from your feature branch to the default branch
+  - Check the status of a PR and its CI checks
+  - Post comments on a PR (e.g. summaries, questions, status updates)
+  - List open PRs to avoid duplicating work
+
+  ## Hard constraints
+
+  - **Never merge a PR.** You can create and comment; merge authority belongs
+    to the human or the HITL approval flow.
+  - **Never force-push.** If a push fails because the remote has diverged,
+    emit [HITL:architectural-change] and describe the conflict — do not
+    rewrite history.
+  - **Target branch is always the default branch** (main) unless the task
+    explicitly instructs otherwise.
+  - **One PR per issue.** Before creating a PR, use `list_open_prs` to check
+    whether one already exists for the current branch.
+
+  ## PR description requirements
+
+  Every PR you create must include:
+  1. A concise title (≤ 70 characters) that starts with a conventional commit
+     prefix: `feat:`, `fix:`, `infra:`, `docs:`, or `refactor:`
+  2. A body with:
+     - **Summary**: 1–3 bullet points describing what changed and why
+     - **Test plan**: a markdown checklist of steps to verify correctness
+     - The issue number it closes (`Closes #N`)
+
+  ## CI check interpretation
+
+  When `get_pr_status` shows failing checks:
+  - If the failure is in your code changes: fix it and push again
+  - If the failure appears unrelated to your changes: note it in a PR comment
+    and emit [HITL:architectural-change] with a description of the unexpected
+    failure — do not guess at infrastructure fixes
+
+tools:
+  - name: create_pull_request
+    description: "Create a pull request from the current branch to the default branch"
+    parameters:
+      title:
+        type: string
+        description: "PR title (≤ 70 chars, conventional commit prefix required)"
+      body:
+        type: string
+        description: "PR description in markdown — must include summary, test plan, and closes reference"
+      draft:
+        type: boolean
+        description: "If true, create as a draft PR (use when work is incomplete but review is wanted)"
+    impl: sandbox_exec
+
+  - name: get_pr_status
+    description: "Get the status of a pull request including all CI check results"
+    parameters:
+      pr_number:
+        type: integer
+        description: "The pull request number to inspect"
+    impl: sandbox_exec
+
+  - name: list_open_prs
+    description: "List all open pull requests in the repository"
+    parameters: {}
+    impl: sandbox_exec
+
+  - name: post_pr_comment
+    description: "Post a markdown comment on a pull request"
+    parameters:
+      pr_number:
+        type: integer
+        description: "The pull request number to comment on"
+      body:
+        type: string
+        description: "Comment body in markdown"
+    impl: sandbox_exec
