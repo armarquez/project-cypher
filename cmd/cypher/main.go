@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/armarquez/project-cypher/internal/config"
+	"github.com/armarquez/project-cypher/internal/doctor"
 	"github.com/armarquez/project-cypher/internal/gateway"
 	"github.com/armarquez/project-cypher/internal/github"
 	"github.com/armarquez/project-cypher/internal/orchestrator"
@@ -23,6 +24,9 @@ const version = "0.1.0"
 func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
+		case "doctor":
+			runDoctor(os.Args[2:])
+			return
 		case "validate":
 			runValidate(os.Args[2:])
 			return
@@ -32,6 +36,50 @@ func main() {
 		}
 	}
 	runOrchestrator()
+}
+
+func runDoctor(args []string) {
+	fs := flag.NewFlagSet("cypher doctor", flag.ExitOnError)
+	cfgPath := fs.String("config", envOrDefault("CYPHER_CONFIG", "configs/project-cypher.yaml"), "project config YAML")
+	skillsDir := fs.String("skills-dir", "skills", "directory containing skill bundle YAML files")
+	fs.Parse(args) //nolint:errcheck
+
+	cfg := doctor.Config{
+		GitHubToken:  os.Getenv("CYPHER_GITHUB_TOKEN"),
+		ConfigPath:   *cfgPath,
+		SkillsDir:    *skillsDir,
+		DockerSocket: envOrDefault("CYPHER_DOCKER_SOCKET", "/var/run/docker.sock"),
+		OpenHandsURL: envOrDefault("CYPHER_OPENHANDS_URL", "http://localhost:3000"),
+		WorkerImage:  envOrDefault("CYPHER_WORKER_IMAGE", "ghcr.io/all-hands-ai/openhands:main"),
+	}
+
+	fmt.Println("Checking environment...")
+	fmt.Println()
+
+	results := doctor.Run(context.Background(), cfg)
+	failed := 0
+	for _, r := range results {
+		if r.Pass {
+			if r.Detail != "" {
+				fmt.Printf("  ✓ %s (%s)\n", r.Name, r.Detail)
+			} else {
+				fmt.Printf("  ✓ %s\n", r.Name)
+			}
+		} else {
+			fmt.Printf("  ✗ %s\n", r.Name)
+			if r.Fix != "" {
+				fmt.Printf("    → %s\n", r.Fix)
+			}
+			failed++
+		}
+	}
+	fmt.Println()
+
+	if failed > 0 {
+		fmt.Printf("%d check(s) failed.\n", failed)
+		os.Exit(1)
+	}
+	fmt.Println("All checks passed.")
 }
 
 func runValidate(args []string) {

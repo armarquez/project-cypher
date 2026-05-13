@@ -32,6 +32,10 @@ coverage:
     go test -coverprofile=coverage.out ./internal/...
     go tool cover -func=coverage.out
 
+# Check the runtime environment (token, config, Docker, OpenHands)
+doctor:
+    go run ./cmd/cypher doctor
+
 # Validate a project config file (default: configs/project-cypher.yaml)
 validate CONFIG="configs/project-cypher.yaml":
     go run ./cmd/cypher validate --config {{CONFIG}}
