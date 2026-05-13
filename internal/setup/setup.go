@@ -345,9 +345,11 @@ func Run(ctx context.Context, cfg Config) error {
 	fmt.Fprintf(out, "  Review the permissions and click \"Create GitHub App\" to continue.\n\n")
 	fmt.Fprintf(out, "  Waiting for callback... (ctrl-c to cancel)\n\n")
 
-	if err := openBrowser(localURL); err != nil {
-		fmt.Fprintf(out, "  Could not open browser automatically.\n")
-		fmt.Fprintf(out, "  Please open this URL manually: %s\n\n", localURL)
+	if cfg.OnServerReady == nil {
+		if err := openBrowser(localURL); err != nil {
+			fmt.Fprintf(out, "  Could not open browser automatically.\n")
+			fmt.Fprintf(out, "  Please open this URL manually: %s\n\n", localURL)
+		}
 	}
 
 	// Step 3: Wait for code.
@@ -377,8 +379,10 @@ func Run(ctx context.Context, cfg Config) error {
 	fmt.Fprintf(out, "  Click \"Install\" to grant access to the repository.\n\n")
 	fmt.Fprintf(out, "  Waiting...\n\n")
 
-	if err := openBrowser(installURL); err != nil {
-		fmt.Fprintf(out, "  Please open this URL manually: %s\n\n", installURL)
+	if cfg.OnServerReady == nil {
+		if err := openBrowser(installURL); err != nil {
+			fmt.Fprintf(out, "  Please open this URL manually: %s\n\n", installURL)
+		}
 	}
 
 	// Step 6: Poll for installation.
