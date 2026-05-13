@@ -51,6 +51,46 @@ type Config struct {
 	Guardrails        []Guardrail `yaml:"guardrails"`
 }
 
+// ResolveGHToken looks up the GitHub token using a two-level fallback chain:
+//
+//  1. CYPHER_GH_TOKEN_{OWNER}_{REPO}  — per-repo (highest priority)
+//  2. CYPHER_GH_TOKEN                 — global fallback
+//
+// The returned varName is the env var that provided the token, or the expected
+// per-repo var name when no token is found (so callers can name it in errors).
+// owner and repo may be empty, in which case only CYPHER_GH_TOKEN is tried.
+// The deprecated return value is always false; it is reserved for future use.
+func ResolveGHToken(owner, repo string) (token, varName string, deprecated bool) {
+	if owner != "" && repo != "" {
+		specific := "CYPHER_GH_TOKEN_" + toEnvSuffix(owner) + "_" + toEnvSuffix(repo)
+		if v := os.Getenv(specific); v != "" {
+			return v, specific, false
+		}
+	}
+	if v := os.Getenv("CYPHER_GH_TOKEN"); v != "" {
+		return v, "CYPHER_GH_TOKEN", false
+	}
+	// Not found — return the per-repo var name as what the caller should set.
+	if owner != "" && repo != "" {
+		return "", "CYPHER_GH_TOKEN_" + toEnvSuffix(owner) + "_" + toEnvSuffix(repo), false
+	}
+	return "", "CYPHER_GH_TOKEN", false
+}
+
+// toEnvSuffix converts a string to an env var suffix: uppercased,
+// non-alphanumeric characters replaced with underscores.
+func toEnvSuffix(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToUpper(s) {
+		if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('_')
+		}
+	}
+	return b.String()
+}
+
 // ParseRepo splits a GitHub target_repo value into owner and repo.
 // Accepts https://github.com/owner/repo, http://github.com/owner/repo,
 // owner/repo, and owner/repo.git forms.

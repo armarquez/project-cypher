@@ -43,14 +43,17 @@ func detail(results []Result, name string) string {
 // --- CheckTokenSet ---
 
 func TestCheckTokenSet_Set(t *testing.T) {
-	r := CheckTokenSet("ghp_abc")
+	r := CheckTokenSet("ghp_abc", "CYPHER_GH_TOKEN_ORG_REPO", false)
 	if !r.Pass {
 		t.Error("expected pass when token is non-empty")
+	}
+	if r.Name != "CYPHER_GH_TOKEN_ORG_REPO set" {
+		t.Errorf("unexpected name: %q", r.Name)
 	}
 }
 
 func TestCheckTokenSet_Empty(t *testing.T) {
-	r := CheckTokenSet("")
+	r := CheckTokenSet("", "CYPHER_GH_TOKEN_ORG_REPO", false)
 	if r.Pass {
 		t.Error("expected fail when token is empty")
 	}
@@ -66,7 +69,7 @@ func TestCheckGitHub_ValidToken(t *testing.T) {
 		"X-OAuth-Scopes", "repo, workflow")
 	defer s.Close()
 
-	results := CheckGitHub(context.Background(), s.Client(), s.URL, "ghp_tok")
+	results := CheckGitHub(context.Background(), s.Client(), s.URL, "ghp_tok", "CYPHER_GH_TOKEN")
 	if !pass(results, "GitHub token valid") {
 		t.Error("expected GitHub token valid to pass")
 	}
@@ -83,7 +86,7 @@ func TestCheckGitHub_MissingRepoScope(t *testing.T) {
 		"X-OAuth-Scopes", "read:org")
 	defer s.Close()
 
-	results := CheckGitHub(context.Background(), s.Client(), s.URL, "ghp_tok")
+	results := CheckGitHub(context.Background(), s.Client(), s.URL, "ghp_tok", "CYPHER_GH_TOKEN")
 	if !pass(results, "GitHub token valid") {
 		t.Error("token should be valid even with wrong scopes")
 	}
@@ -97,7 +100,7 @@ func TestCheckGitHub_FineGrainedToken(t *testing.T) {
 	s := srv(t, 200, `{"login":"user"}`)
 	defer s.Close()
 
-	results := CheckGitHub(context.Background(), s.Client(), s.URL, "github_pat_xyz")
+	results := CheckGitHub(context.Background(), s.Client(), s.URL, "ghp_tok", "CYPHER_GH_TOKEN")
 	if !pass(results, "GitHub token valid") {
 		t.Error("expected pass for valid fine-grained token")
 	}
@@ -110,14 +113,14 @@ func TestCheckGitHub_Unauthorized(t *testing.T) {
 	s := srv(t, 401, `{"message":"Bad credentials"}`)
 	defer s.Close()
 
-	results := CheckGitHub(context.Background(), s.Client(), s.URL, "bad_token")
+	results := CheckGitHub(context.Background(), s.Client(), s.URL, "ghp_tok", "CYPHER_GH_TOKEN")
 	if pass(results, "GitHub token valid") {
 		t.Error("expected fail for 401 response")
 	}
 }
 
 func TestCheckGitHub_EmptyToken(t *testing.T) {
-	results := CheckGitHub(context.Background(), http.DefaultClient, "http://unused", "")
+	results := CheckGitHub(context.Background(), http.DefaultClient, "http://unused", "", "CYPHER_GH_TOKEN")
 	if pass(results, "GitHub token valid") {
 		t.Error("expected fail when token is empty")
 	}

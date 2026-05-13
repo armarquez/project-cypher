@@ -23,8 +23,12 @@ type Result struct {
 }
 
 // Config holds all inputs the doctor needs to run its checks.
+// Owner and Repo are derived from a successfully loaded target_repo;
+// they may be empty if the config file is unreadable, in which case
+// token resolution falls back to CYPHER_GH_TOKEN only.
 type Config struct {
-	GitHubToken  string
+	Owner        string
+	Repo         string
 	ConfigPath   string
 	SkillsDir    string
 	DockerSocket string
@@ -36,10 +40,11 @@ type Config struct {
 func Run(ctx context.Context, cfg Config) []Result {
 	var results []Result
 
-	results = append(results, CheckTokenSet(cfg.GitHubToken))
+	token, varName, deprecated := config.ResolveGHToken(cfg.Owner, cfg.Repo)
+	results = append(results, CheckTokenSet(token, varName, deprecated))
 
 	ghClient := &http.Client{Timeout: 10 * time.Second}
-	results = append(results, CheckGitHub(ctx, ghClient, "https://api.github.com", cfg.GitHubToken)...)
+	results = append(results, CheckGitHub(ctx, ghClient, "https://api.github.com", token, varName)...)
 
 	results = append(results, CheckConfig(cfg.ConfigPath, cfg.SkillsDir)...)
 
@@ -63,24 +68,27 @@ func newUnixClient(socketPath string) *http.Client {
 	}
 }
 
-// CheckTokenSet checks that CYPHER_GITHUB_TOKEN is non-empty.
-func CheckTokenSet(token string) Result {
+// CheckTokenSet checks that the resolved GitHub token env var is non-empty.
+// varName is the specific env var being checked (shown in output).
+// deprecated is reserved for future use and currently always false.
+func CheckTokenSet(token, varName string, deprecated bool) Result {
 	if token == "" {
 		return Result{
-			Name: "CYPHER_GITHUB_TOKEN set",
+			Name: varName + " set",
 			Pass: false,
-			Fix:  "set CYPHER_GITHUB_TOKEN in your .env file or shell",
+			Fix:  fmt.Sprintf("set %s (or CYPHER_GH_TOKEN as a global fallback) in your .env file or shell", varName),
 		}
 	}
-	return Result{Name: "CYPHER_GITHUB_TOKEN set", Pass: true}
+	return Result{Name: varName + " set", Pass: true}
 }
 
 // CheckGitHub validates the token against the GitHub API and inspects its scopes.
-func CheckGitHub(ctx context.Context, client *http.Client, apiBase, token string) []Result {
+// varName is included in failure messages so the user knows which var to fix.
+func CheckGitHub(ctx context.Context, client *http.Client, apiBase, token, varName string) []Result {
 	if token == "" {
 		return []Result{
-			{Name: "GitHub token valid", Pass: false, Fix: "set CYPHER_GITHUB_TOKEN first"},
-			{Name: "GitHub token scopes", Pass: false, Fix: "set CYPHER_GITHUB_TOKEN first"},
+			{Name: "GitHub token valid", Pass: false, Fix: "set " + varName + " first"},
+			{Name: "GitHub token scopes", Pass: false, Fix: "set " + varName + " first"},
 		}
 	}
 

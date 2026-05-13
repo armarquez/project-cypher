@@ -205,6 +205,62 @@ func TestGuardrailEnabled_EmptyList(t *testing.T) {
 	}
 }
 
+func TestResolveGHToken(t *testing.T) {
+	const specificVar = "CYPHER_GH_TOKEN_MYORG_MY_REPO"
+	const globalVar = "CYPHER_GH_TOKEN"
+
+	unset := func(vars ...string) {
+		for _, v := range vars {
+			os.Unsetenv(v)
+		}
+	}
+
+	t.Run("specific var takes priority", func(t *testing.T) {
+		t.Setenv(specificVar, "specific-tok")
+		t.Setenv(globalVar, "global-tok")
+		tok, varName, deprecated := ResolveGHToken("myorg", "my-repo")
+		if tok != "specific-tok" || varName != specificVar || deprecated {
+			t.Errorf("got (%q, %q, %v)", tok, varName, deprecated)
+		}
+	})
+
+	t.Run("global fallback when specific absent", func(t *testing.T) {
+		unset(specificVar)
+		t.Setenv(globalVar, "global-tok")
+		tok, varName, deprecated := ResolveGHToken("myorg", "my-repo")
+		if tok != "global-tok" || varName != globalVar || deprecated {
+			t.Errorf("got (%q, %q, %v)", tok, varName, deprecated)
+		}
+	})
+
+	t.Run("not found returns expected specific var name", func(t *testing.T) {
+		unset(specificVar, globalVar)
+		tok, varName, deprecated := ResolveGHToken("myorg", "my-repo")
+		if tok != "" || varName != specificVar || deprecated {
+			t.Errorf("got (%q, %q, %v)", tok, varName, deprecated)
+		}
+	})
+
+	t.Run("empty owner/repo skips specific var", func(t *testing.T) {
+		unset(specificVar, globalVar)
+		t.Setenv(globalVar, "global-tok")
+		tok, varName, _ := ResolveGHToken("", "")
+		if tok != "global-tok" || varName != globalVar {
+			t.Errorf("got (%q, %q)", tok, varName)
+		}
+	})
+
+	t.Run("env suffix derivation: hyphens and slashes become underscores", func(t *testing.T) {
+		const derived = "CYPHER_GH_TOKEN_MY_ORG_SOME_REPO"
+		t.Setenv(derived, "tok")
+		tok, varName, _ := ResolveGHToken("my-org", "some-repo")
+		if tok != "tok" || varName != derived {
+			t.Errorf("got (%q, %q)", tok, varName)
+		}
+		os.Unsetenv(derived)
+	})
+}
+
 func TestParseRepo(t *testing.T) {
 	cases := []struct {
 		input     string
