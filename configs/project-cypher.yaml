@@ -10,3 +10,23 @@ design_constraints: >
   Follow idiomatic Go. No global state. Table-driven tests where applicable.
   Best practices over velocity — optimize for long-term maintainability.
   No panic except in main. Idiomatic error wrapping with fmt.Errorf("context: %w", err).
+
+# Guardrail profile — reference implementation for Project Cypher.
+# All standard rules are active. Other projects may subset this list.
+guardrails:
+  - id: require_pr
+    description: "All changes must go through a pull request — no direct pushes to main"
+  - id: require_ci
+    description: "CI (vet + test + coverage) must pass before merging"
+  - id: hitl:new-dependency
+    description: "Escalate any new external Go module dependency to human review"
+  - id: hitl:architectural-change
+    description: "Escalate changes to component communication or structure to human review"
+  - id: hitl:security
+    description: "Escalate credential handling, auth, or trust boundary changes to human review"
+  - id: oss_adoption:evaluate
+    description: "Architect evaluates OSS security posture and abstraction fit before adoption"
+  - id: docs:require-readme-update
+    description: "README must be updated when setup, commands, or project status change"
+  - id: docs:require-arch-doc-update
+    description: "docs/architecture.md must be updated when component structure or communication changes"
