@@ -9,6 +9,7 @@ import (
 
 	"github.com/armarquez/project-cypher/internal/config"
 	"github.com/armarquez/project-cypher/internal/github"
+	"github.com/armarquez/project-cypher/internal/hitl"
 	"github.com/armarquez/project-cypher/internal/session"
 )
 
@@ -114,6 +115,40 @@ func testOrch(gh *fakeGH, sc *fakeSessionCreator, oh *fakeOH) *Orchestrator {
 		time.Millisecond, // fast poll for tests
 		nil,              // nil slog.Logger is valid; InfoContext is a no-op
 	)
+}
+
+// --- guardrailEnabled ---
+
+func TestGuardrailEnabled_KnownKinds(t *testing.T) {
+	orch := testOrch(&fakeGH{}, &fakeSessionCreator{sess: &fakeSession{}}, &fakeOH{})
+	for _, kind := range []hitl.TriggerKind{
+		hitl.TriggerNewDependency,
+		hitl.TriggerArchitectural,
+		hitl.TriggerSecurity,
+	} {
+		if !orch.guardrailEnabled(kind) {
+			t.Errorf("expected %q to be enabled with standard guardrails", kind)
+		}
+	}
+}
+
+func TestGuardrailEnabled_UnknownKind(t *testing.T) {
+	orch := testOrch(&fakeGH{}, &fakeSessionCreator{sess: &fakeSession{}}, &fakeOH{})
+	if orch.guardrailEnabled(hitl.TriggerKind("unknown")) {
+		t.Error("unknown trigger kind should not be enabled")
+	}
+}
+
+func TestGuardrailEnabled_DisabledViaGuardrails(t *testing.T) {
+	cfg := testCfg()
+	cfg.Guardrails = []config.Guardrail{
+		{ID: "require_pr", Description: "PRs only"},
+		// hitl:new-dependency intentionally absent
+	}
+	orch := New("o", "r", cfg, &fakeGH{}, &fakeSessionCreator{sess: &fakeSession{}}, func() OHClient { return &fakeOH{} }, time.Millisecond, nil)
+	if orch.guardrailEnabled(hitl.TriggerNewDependency) {
+		t.Error("new-dependency should be disabled when not in guardrails list")
+	}
 }
 
 // --- issueBranch ---

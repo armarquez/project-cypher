@@ -27,9 +27,9 @@ test:
 test-pkg PKG:
     go test ./internal/{{PKG}}/... -v
 
-# Run tests and print function-level coverage report
+# Run tests and print function-level coverage report (internal packages only — cmd/ is excluded)
 coverage:
-    go test -coverprofile=coverage.out ./...
+    go test -coverprofile=coverage.out ./internal/...
     go tool cover -func=coverage.out
 
 # Validate a project config file (default: configs/project-cypher.yaml)

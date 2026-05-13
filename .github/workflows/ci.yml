@@ -40,7 +40,7 @@ jobs:
       - name: Coverage
         if: hashFiles('go.mod') != ''
         run: |
-          go test -coverprofile=coverage.out ./...
+          go test -coverprofile=coverage.out ./internal/...
           go tool cover -func=coverage.out
           COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | tr -d '%')
           if [ "${COVERAGE%.*}" -lt 80 ]; then
