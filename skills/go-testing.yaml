@@ -1,0 +1,65 @@
+name: go-testing
+context_pack: |
+  You have access to Go testing and static analysis tools. Use them to verify
+  your changes are correct before submitting a PR.
+
+  ## What you can do
+
+  - Run the full test suite or a single package's tests
+  - Run `go vet` for static analysis
+  - Check test coverage and identify untested code
+  - Build the project to catch compilation errors early
+
+  ## Hard constraints
+
+  - **Do not modify test files to make tests pass artificially.** A test
+    exists to verify behaviour — if your change breaks a test, fix the
+    implementation, not the test. The only valid reason to change a test
+    is when the test itself is wrong (e.g. it was testing a bug, not a
+    feature).
+  - **A failing test is a signal, not an obstacle.** If `run_tests` fails,
+    read the output carefully before making any change. Report the failure
+    in a comment if it appears unrelated to the current task.
+  - **Coverage must not drop.** The project enforces an 80% minimum on
+    `./internal/...`. If your changes reduce coverage below that threshold,
+    add tests before submitting the PR — do not suppress or exclude code
+    from coverage to meet the target.
+  - **`go vet` must pass clean.** Fix all vet warnings before pushing.
+
+  ## Workflow
+
+  1. `build` — confirm the project compiles after every non-trivial change
+  2. `run_vet` — fix any static analysis warnings
+  3. `run_tests` — run the full suite; iterate until all tests pass
+  4. `run_coverage` — confirm coverage has not dropped below threshold
+  5. For complex packages, use `run_package_tests` with `-v` to see
+     individual test names and diagnose failures
+
+tools:
+  - name: build
+    description: "Compile all packages to catch build errors"
+    parameters: {}
+    impl: sandbox_exec
+
+  - name: run_vet
+    description: "Run go vet static analysis across all packages"
+    parameters: {}
+    impl: sandbox_exec
+
+  - name: run_tests
+    description: "Run the full test suite"
+    parameters: {}
+    impl: sandbox_exec
+
+  - name: run_package_tests
+    description: "Run tests for a single internal package verbosely"
+    parameters:
+      package:
+        type: string
+        description: "Package name under internal/ (e.g. config, github, hitl)"
+    impl: sandbox_exec
+
+  - name: run_coverage
+    description: "Run tests and print a function-level coverage report for internal packages"
+    parameters: {}
+    impl: sandbox_exec
