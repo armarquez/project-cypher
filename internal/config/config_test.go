@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -44,8 +45,10 @@ design_constraints: "No global state."
 
 func TestLoad_MissingRequiredFields(t *testing.T) {
 	cases := []struct {
-		name    string
-		content string
+		name        string
+		content     string
+		wantField   string
+		wantExample string
 	}{
 		{
 			name: "missing target_repo",
@@ -55,6 +58,8 @@ architect_model: anthropic/claude-sonnet-4-5
 test_command: go test ./...
 skills: [git-operations]
 `,
+			wantField:   "target_repo",
+			wantExample: "https://github.com/owner/repo",
 		},
 		{
 			name: "missing worker_model",
@@ -64,6 +69,30 @@ architect_model: anthropic/claude-sonnet-4-5
 test_command: go test ./...
 skills: [git-operations]
 `,
+			wantField:   "worker_model",
+			wantExample: "gemini/gemini-2.0-flash",
+		},
+		{
+			name: "missing architect_model",
+			content: `
+target_repo: https://github.com/org/repo
+worker_model: gemini/gemini-2.0-flash
+test_command: go test ./...
+skills: [git-operations]
+`,
+			wantField:   "architect_model",
+			wantExample: "anthropic/claude-sonnet-4-6",
+		},
+		{
+			name: "missing test_command",
+			content: `
+target_repo: https://github.com/org/repo
+worker_model: gemini/gemini-2.0-flash
+architect_model: anthropic/claude-sonnet-4-5
+skills: [git-operations]
+`,
+			wantField:   "test_command",
+			wantExample: "just check",
 		},
 		{
 			name: "empty skills list",
@@ -74,14 +103,24 @@ architect_model: anthropic/claude-sonnet-4-5
 test_command: go test ./...
 skills: []
 `,
+			wantField:   "skills",
+			wantExample: "[git-operations, github-pr, go-testing]",
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			path := writeTemp(t, tc.content)
-			if _, err := Load(path); err == nil {
-				t.Error("expected error, got nil")
+			_, err := Load(path)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			msg := err.Error()
+			if !strings.Contains(msg, tc.wantField) {
+				t.Errorf("error %q does not mention field %q", msg, tc.wantField)
+			}
+			if !strings.Contains(msg, tc.wantExample) {
+				t.Errorf("error %q does not contain example %q", msg, tc.wantExample)
 			}
 		})
 	}
