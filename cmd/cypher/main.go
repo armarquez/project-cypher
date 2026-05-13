@@ -44,8 +44,15 @@ func runDoctor(args []string) {
 	skillsDir := fs.String("skills-dir", "skills", "directory containing skill bundle YAML files")
 	fs.Parse(args) //nolint:errcheck
 
+	// Best-effort: load config to get owner/repo for per-repo token lookup.
+	var ghOwner, ghRepo string
+	if c, err := config.Load(*cfgPath); err == nil {
+		ghOwner, ghRepo, _ = config.ParseRepo(c.TargetRepo)
+	}
+
 	cfg := doctor.Config{
-		GitHubToken:  os.Getenv("CYPHER_GITHUB_TOKEN"),
+		Owner:        ghOwner,
+		Repo:         ghRepo,
 		ConfigPath:   *cfgPath,
 		SkillsDir:    *skillsDir,
 		DockerSocket: envOrDefault("CYPHER_DOCKER_SOCKET", "/var/run/docker.sock"),
@@ -153,15 +160,19 @@ func runOrchestrator() {
 		os.Exit(1)
 	}
 
-	token := os.Getenv("CYPHER_GITHUB_TOKEN")
-	if token == "" {
-		log.Error("CYPHER_GITHUB_TOKEN is required")
-		os.Exit(1)
-	}
-
 	owner, repo, err := config.ParseRepo(cfg.TargetRepo)
 	if err != nil {
 		log.Error("parse target_repo", "err", err)
+		os.Exit(1)
+	}
+
+	token, tokenVar, _ := config.ResolveGHToken(owner, repo)
+	if token == "" {
+		log.Error("GitHub token not set",
+			"tried", tokenVar,
+			"fallback", "CYPHER_GH_TOKEN",
+			"hint", "set "+tokenVar+" in your .env file",
+		)
 		os.Exit(1)
 	}
 
