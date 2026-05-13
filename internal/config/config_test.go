@@ -204,3 +204,37 @@ func TestGuardrailEnabled_EmptyList(t *testing.T) {
 		t.Error("empty guardrails list should return false")
 	}
 }
+
+func TestParseRepo(t *testing.T) {
+	cases := []struct {
+		input     string
+		wantOwner string
+		wantRepo  string
+		wantErr   bool
+	}{
+		{"https://github.com/owner/repo", "owner", "repo", false},
+		{"http://github.com/owner/repo", "owner", "repo", false},
+		{"https://github.com/owner/repo.git", "owner", "repo", false},
+		{"owner/repo", "owner", "repo", false},
+		{"not-a-repo", "", "", true},
+		{"", "", "", true},
+		{"owner/", "", "", true},
+		{"/repo", "", "", true},
+	}
+	for _, tc := range cases {
+		owner, repo, err := ParseRepo(tc.input)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("ParseRepo(%q) expected error, got nil", tc.input)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("ParseRepo(%q) unexpected error: %v", tc.input, err)
+			continue
+		}
+		if owner != tc.wantOwner || repo != tc.wantRepo {
+			t.Errorf("ParseRepo(%q) = (%q, %q), want (%q, %q)", tc.input, owner, repo, tc.wantOwner, tc.wantRepo)
+		}
+	}
+}

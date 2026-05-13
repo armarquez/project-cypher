@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -48,6 +49,20 @@ type Config struct {
 	Skills            []string    `yaml:"skills"`
 	DesignConstraints string      `yaml:"design_constraints"`
 	Guardrails        []Guardrail `yaml:"guardrails"`
+}
+
+// ParseRepo splits a GitHub target_repo value into owner and repo.
+// Accepts https://github.com/owner/repo, http://github.com/owner/repo,
+// owner/repo, and owner/repo.git forms.
+func ParseRepo(targetRepo string) (owner, repo string, err error) {
+	s := strings.TrimPrefix(targetRepo, "https://github.com/")
+	s = strings.TrimPrefix(s, "http://github.com/")
+	s = strings.TrimSuffix(s, ".git")
+	parts := strings.SplitN(s, "/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", fmt.Errorf("cannot parse %q as owner/repo — expected https://github.com/owner/repo", targetRepo)
+	}
+	return parts[0], parts[1], nil
 }
 
 // GuardrailEnabled reports whether the named rule is active for this project.
