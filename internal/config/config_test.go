@@ -99,3 +99,69 @@ func TestLoad_FileNotFound(t *testing.T) {
 		t.Error("expected error for missing file, got nil")
 	}
 }
+
+func TestLoad_GuardrailsDefaultWhenAbsent(t *testing.T) {
+	path := writeTemp(t, `
+target_repo: https://github.com/org/repo
+worker_model: gemini/gemini-2.0-flash
+architect_model: anthropic/claude-sonnet-4-5
+test_command: go test ./...
+skills: [git-operations]
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.Guardrails) == 0 {
+		t.Fatal("expected standard guardrails to be applied when key is absent")
+	}
+	for _, id := range []string{
+		"require_pr",
+		"require_ci",
+		"hitl:new-dependency",
+		"hitl:architectural-change",
+		"hitl:security",
+		"oss_adoption:evaluate",
+		"docs:require-readme-update",
+		"docs:require-arch-doc-update",
+	} {
+		if !cfg.GuardrailEnabled(id) {
+			t.Errorf("expected guardrail %q to be enabled by default", id)
+		}
+	}
+}
+
+func TestLoad_GuardrailsExplicit(t *testing.T) {
+	path := writeTemp(t, `
+target_repo: https://github.com/org/repo
+worker_model: gemini/gemini-2.0-flash
+architect_model: anthropic/claude-sonnet-4-5
+test_command: go test ./...
+skills: [git-operations]
+guardrails:
+  - id: require_pr
+    description: "PRs only"
+  - id: hitl:security
+    description: "Security escalation"
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.GuardrailEnabled("require_pr") {
+		t.Error("require_pr should be enabled")
+	}
+	if !cfg.GuardrailEnabled("hitl:security") {
+		t.Error("hitl:security should be enabled")
+	}
+	if cfg.GuardrailEnabled("hitl:new-dependency") {
+		t.Error("hitl:new-dependency should not be enabled — not in explicit list")
+	}
+}
+
+func TestGuardrailEnabled_EmptyList(t *testing.T) {
+	cfg := &Config{}
+	if cfg.GuardrailEnabled("anything") {
+		t.Error("empty guardrails list should return false")
+	}
+}

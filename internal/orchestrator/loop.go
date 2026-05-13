@@ -159,6 +159,9 @@ func (o *Orchestrator) pollUntilDone(
 				lastEventID = ev.ID
 			}
 			for _, t := range hitl.Detect(ev.Text) {
+				if !o.guardrailEnabled(t.Kind) {
+					continue
+				}
 				req := github.HITLRequest{
 					Trigger:  string(t.Kind),
 					Proposed: t.Detail,
@@ -188,6 +191,25 @@ func (o *Orchestrator) pollUntilDone(
 		case <-time.After(o.pollInt):
 		}
 	}
+}
+
+// guardrailEnabled reports whether the guardrail rule that maps to the given
+// HITL trigger kind is active in the project config. Safe to call with a nil
+// or empty Guardrails slice — defaults to enforcing all triggers.
+func (o *Orchestrator) guardrailEnabled(kind hitl.TriggerKind) bool {
+	ids := map[hitl.TriggerKind]string{
+		hitl.TriggerNewDependency: "hitl:new-dependency",
+		hitl.TriggerArchitectural: "hitl:architectural-change",
+		hitl.TriggerSecurity:      "hitl:security",
+	}
+	id, ok := ids[kind]
+	if !ok {
+		return false
+	}
+	if len(o.cfg.Guardrails) == 0 {
+		return true // no explicit list → all triggers on
+	}
+	return o.cfg.GuardrailEnabled(id)
 }
 
 // issueBranch derives a valid Git branch name from the task.
@@ -227,12 +249,29 @@ func buildPrompt(task github.Task, owner, repo, branch string, cfg *config.Confi
 		fmt.Fprintf(&sb, "Design constraints: %s\n\n", cfg.DesignConstraints)
 	}
 	fmt.Fprintf(&sb, "Test command: %s\n\n", cfg.TestCommand)
-	sb.WriteString("## HITL escalation markers\n\n")
-	sb.WriteString("Emit the appropriate marker on its own line if you encounter any of these:\n\n")
-	sb.WriteString("  [HITL:new-dependency] <package and reason>    — any new external dependency\n")
-	sb.WriteString("  [HITL:architectural-change] <what and why>    — changes to component communication\n")
-	sb.WriteString("  [HITL:security] <description>                 — any security-sensitive change\n\n")
-	sb.WriteString("After emitting a marker, pause your work. The orchestrator will seek human approval\n")
-	sb.WriteString("and resume your session when a decision is made.\n")
+	type marker struct {
+		guardrailID string
+		line        string
+	}
+	markers := []marker{
+		{"hitl:new-dependency", "  [HITL:new-dependency] <package and reason>    — any new external dependency\n"},
+		{"hitl:architectural-change", "  [HITL:architectural-change] <what and why>    — changes to component communication\n"},
+		{"hitl:security", "  [HITL:security] <description>                 — any security-sensitive change\n"},
+	}
+	var activeMarkers []marker
+	for _, m := range markers {
+		if len(cfg.Guardrails) == 0 || cfg.GuardrailEnabled(m.guardrailID) {
+			activeMarkers = append(activeMarkers, m)
+		}
+	}
+	if len(activeMarkers) > 0 {
+		sb.WriteString("## HITL escalation markers\n\n")
+		sb.WriteString("Emit the appropriate marker on its own line if you encounter any of these:\n\n")
+		for _, m := range activeMarkers {
+			sb.WriteString(m.line)
+		}
+		sb.WriteString("\nAfter emitting a marker, pause your work. The orchestrator will seek human approval\n")
+		sb.WriteString("and resume your session when a decision is made.\n")
+	}
 	return sb.String()
 }

@@ -100,6 +100,7 @@ func testCfg() *config.Config {
 		TestCommand:       "just check",
 		Skills:            []string{"git-operations"},
 		DesignConstraints: "no global state",
+		Guardrails:        config.StandardGuardrails,
 	}
 }
 

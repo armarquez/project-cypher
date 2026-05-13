@@ -172,6 +172,47 @@ skills:
 design_constraints: "No global state; all functions must be unit-testable."
 ```
 
+### Guardrail Profiles
+
+Every project config carries a `guardrails:` list that declares which governance rules the Control Plane enforces — independent of what the worker tries to do. Each rule is identified by an `id` string; the `description` is human-readable context.
+
+**Omitting `guardrails:` entirely applies all standard rules** (safe default). An explicit list is the subset of rules active for that project — rules not in the list are silently inactive.
+
+```yaml
+guardrails:
+  - id: require_pr
+    description: "All changes must go through a pull request"
+  - id: require_ci
+    description: "CI must pass before merging"
+  - id: hitl:new-dependency
+    description: "Escalate new external dependencies to human review"
+  - id: hitl:architectural-change
+    description: "Escalate architectural changes to human review"
+  - id: hitl:security
+    description: "Escalate security implications to human review"
+  - id: oss_adoption:evaluate
+    description: "Architect reviews OSS before adoption"
+  - id: docs:require-readme-update
+    description: "README must be updated when project behavior changes"
+  - id: docs:require-arch-doc-update
+    description: "Architecture docs must reflect structural changes"
+```
+
+**Standard rule IDs and their enforcement points:**
+
+| Rule ID | Enforced by | Effect |
+|---|---|---|
+| `require_pr` | Convention + branch protection | Workers always commit to feature branches; direct main pushes are blocked |
+| `require_ci` | GitHub branch ruleset | CI must pass before merge |
+| `hitl:new-dependency` | Control Plane HITL gate | Worker output marker `[HITL:new-dependency]` triggers escalation |
+| `hitl:architectural-change` | Control Plane HITL gate | Worker output marker `[HITL:architectural-change]` triggers escalation |
+| `hitl:security` | Control Plane HITL gate | Worker output marker `[HITL:security]` triggers escalation |
+| `oss_adoption:evaluate` | Architect LLM + HITL | OSS dependencies are evaluated before adoption |
+| `docs:require-readme-update` | Documentation Agent | PR flagged NEEDS WORK if README is stale |
+| `docs:require-arch-doc-update` | Documentation Agent | PR flagged NEEDS WORK if architecture docs are stale |
+
+`configs/project-cypher.yaml` is the reference implementation — all standard rules enabled, serving as the template other project configs inherit from.
+
 ---
 
 ## 7. Deployment Phases
