@@ -16,8 +16,10 @@ build:
 vet:
     go vet ./...
 
-# Run vet + all tests — required before every push
+# Run vet + all tests + 80% coverage gate — required before every push
 check: vet test
+    go test -coverprofile=coverage.out ./internal/...
+    go tool cover -func=coverage.out | awk '/^total/{n=$3+0; printf "Coverage: %.1f%%\n",n; if(n<80){printf "Coverage %.1f%% is below the 80%% threshold\n",n; exit 1}}'
 
 # Run all tests
 test:
