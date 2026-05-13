@@ -32,6 +32,10 @@ coverage:
     go test -coverprofile=coverage.out ./internal/...
     go tool cover -func=coverage.out
 
+# Provision a GitHub App and write credentials to .env (interactive — opens browser)
+setup CONFIG="configs/project-cypher.yaml":
+    go run ./cmd/cypher setup --config {{CONFIG}}
+
 # Check the runtime environment (token, config, Docker, OpenHands)
 doctor:
     go run ./cmd/cypher doctor

@@ -16,6 +16,7 @@ import (
 	"github.com/armarquez/project-cypher/internal/github"
 	"github.com/armarquez/project-cypher/internal/orchestrator"
 	"github.com/armarquez/project-cypher/internal/session"
+	"github.com/armarquez/project-cypher/internal/setup"
 	"github.com/armarquez/project-cypher/internal/validate"
 )
 
@@ -26,6 +27,9 @@ func main() {
 		switch os.Args[1] {
 		case "doctor":
 			runDoctor(os.Args[2:])
+			return
+		case "setup":
+			runSetup(os.Args[2:])
 			return
 		case "validate":
 			runValidate(os.Args[2:])
@@ -87,6 +91,29 @@ func runDoctor(args []string) {
 		os.Exit(1)
 	}
 	fmt.Println("All checks passed.")
+}
+
+func runSetup(args []string) {
+	fs := flag.NewFlagSet("cypher setup", flag.ExitOnError)
+	cfgPath := fs.String("config", envOrDefault("CYPHER_CONFIG", "configs/project-cypher.yaml"), "project config YAML")
+	envPath := fs.String("env", ".env", "path to .env file to write credentials into")
+	cypherDir := fs.String("cypher-dir", ".cypher", "directory for Cypher runtime artifacts")
+	fs.Parse(args) //nolint:errcheck
+
+	cfg, err := config.Load(*cfgPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "load config: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := setup.Run(context.Background(), setup.Config{
+		TargetRepo: cfg.TargetRepo,
+		EnvPath:    *envPath,
+		CypherDir:  *cypherDir,
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "setup failed: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 func runValidate(args []string) {

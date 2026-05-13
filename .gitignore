@@ -7,5 +7,8 @@ configs/*.yaml
 !configs/example.yaml
 !configs/project-cypher.yaml
 
+# Cypher runtime artifacts (GitHub App key, etc.)
+.cypher/
+
 # test coverage artifacts
 coverage.out
