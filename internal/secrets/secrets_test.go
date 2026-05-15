@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -179,22 +180,37 @@ func TestOnePassword_Available_False(t *testing.T) {
 // --- OnePassword.Preflight ---
 
 func TestOnePassword_Preflight_Success(t *testing.T) {
-	bin := writeFakeOp(t, "exit 0")
+	// Simulate `op account list` returning an account entry.
+	bin := writeFakeOp(t, "echo 'myaccount.1password.com'")
 	o := &OnePassword{OpPath: bin}
 	if err := o.Preflight(context.Background()); err != nil {
 		t.Errorf("expected nil error when op succeeds, got: %v", err)
 	}
 }
 
-func TestOnePassword_Preflight_NotSignedIn(t *testing.T) {
-	bin := writeFakeOp(t, "echo '[ERROR] account is not signed in' >&2; exit 1")
+func TestOnePassword_Preflight_CLIError(t *testing.T) {
+	// op exits non-zero (e.g. desktop app not running, no session).
+	bin := writeFakeOp(t, "echo '[ERROR] no accounts found' >&2; exit 1")
 	o := &OnePassword{OpPath: bin}
 	err := o.Preflight(context.Background())
 	if err == nil {
-		t.Fatal("expected error when op is not signed in")
+		t.Fatal("expected error when op account list fails")
 	}
-	if !containsAny(err.Error(), "not signed in", "not ready") {
-		t.Errorf("expected auth-related message in error, got: %v", err)
+	if !strings.Contains(err.Error(), "not ready") {
+		t.Errorf("expected 'not ready' in error, got: %v", err)
+	}
+}
+
+func TestOnePassword_Preflight_NoAccounts(t *testing.T) {
+	// op exits 0 but returns no accounts (unconfigured install).
+	bin := writeFakeOp(t, "echo ''")
+	o := &OnePassword{OpPath: bin}
+	err := o.Preflight(context.Background())
+	if err == nil {
+		t.Fatal("expected error when account list is empty")
+	}
+	if !strings.Contains(err.Error(), "no accounts found") {
+		t.Errorf("expected 'no accounts found' in error, got: %v", err)
 	}
 }
 
@@ -204,19 +220,6 @@ func TestOnePassword_Preflight_BinaryMissing(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when op binary is missing")
 	}
-}
-
-func containsAny(s string, subs ...string) bool {
-	for _, sub := range subs {
-		if len(s) >= len(sub) {
-			for i := 0; i <= len(s)-len(sub); i++ {
-				if s[i:i+len(sub)] == sub {
-					return true
-				}
-			}
-		}
-	}
-	return false
 }
 
 // --- Package-level convenience functions ---
