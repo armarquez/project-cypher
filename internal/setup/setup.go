@@ -118,7 +118,6 @@ type Manifest struct {
 	RedirectURL        string            `json:"redirect_url"`
 	Public             bool              `json:"public"`
 	DefaultPermissions map[string]string `json:"default_permissions"`
-	DefaultEvents      []string          `json:"default_events"`
 }
 
 // GenerateManifest builds the App manifest for the given owner/repo and callback URL.
@@ -136,7 +135,9 @@ func GenerateManifest(owner, repo, callbackURL string) Manifest {
 			"metadata":      "read",
 			"statuses":      "read",
 		},
-		DefaultEvents: []string{"issues", "pull_request"},
+		// DefaultEvents intentionally omitted: GitHub requires a webhook URL when events
+		// are declared in the manifest. Subscribe to events via the App settings page
+		// once the webhook handler (issue #65) is deployed and a public URL is available.
 	}
 }
 

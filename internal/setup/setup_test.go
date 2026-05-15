@@ -35,14 +35,8 @@ func TestGenerateManifest(t *testing.T) {
 	if m.DefaultPermissions["metadata"] != "read" {
 		t.Error("expected metadata:read permission")
 	}
-	found := false
-	for _, e := range m.DefaultEvents {
-		if e == "issues" {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("expected issues event")
+	if m.DefaultPermissions["pull_requests"] != "write" {
+		t.Error("expected pull_requests:write permission")
 	}
 }
 
