@@ -35,10 +35,12 @@ coverage:
     go tool cover -func=coverage.out
 
 # Provision a GitHub App and write credentials to .env (interactive — opens browser)
-setup CONFIG="configs/project-cypher.yaml":
-    go run ./cmd/cypher setup --config {{CONFIG}}
+# PEM_STORAGE: "1password" (default) or "file" — controls where the App private key is stored
+# OP_VAULT: 1Password vault name (default: "Private"), used when PEM_STORAGE=1password
+setup CONFIG="configs/project-cypher.yaml" PEM_STORAGE="1password" OP_VAULT="Private":
+    go run ./cmd/cypher setup --config {{CONFIG}} --pem-storage {{PEM_STORAGE}} --op-vault {{OP_VAULT}}
 
-# Check the runtime environment (token, config, Docker, OpenHands)
+# Check the runtime environment (token, config, Docker, OpenHands, 1Password CLI if op:// secrets configured)
 doctor:
     go run ./cmd/cypher doctor
 
