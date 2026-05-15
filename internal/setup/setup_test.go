@@ -830,3 +830,31 @@ func TestRun_1PasswordPreflight_Fails(t *testing.T) {
 		t.Error("GitHub API should not be called when op preflight fails")
 	}
 }
+
+// --- normalizePEMPath ---
+
+func TestNormalizePEMPath(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		// strips double quotes
+		{`"C:\Users\armar\Downloads\key.pem"`, "/mnt/c/Users/armar/Downloads/key.pem"},
+		// strips single quotes
+		{`'C:\Users\armar\Downloads\key.pem'`, "/mnt/c/Users/armar/Downloads/key.pem"},
+		// forward slashes in Windows path
+		{`C:/Users/armar/Downloads/key.pem`, "/mnt/c/Users/armar/Downloads/key.pem"},
+		// uppercase drive letter
+		{`D:\work\key.pem`, "/mnt/d/work/key.pem"},
+		// already a Unix path — unchanged
+		{"/home/armar/key.pem", "/home/armar/key.pem"},
+		// relative path — unchanged
+		{"key.pem", "key.pem"},
+	}
+	for _, tc := range cases {
+		got := normalizePEMPath(tc.input)
+		if got != tc.want {
+			t.Errorf("normalizePEMPath(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
