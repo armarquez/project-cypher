@@ -344,8 +344,17 @@ func StorePEMIn1Password(ctx context.Context, opPath, pemContent, slug, vault st
 	// Delete any pre-existing item so create doesn't accumulate duplicates.
 	deleteExistingOPItem(ctx, opPath, title, vault)
 
+	// op.exe is a Windows binary and cannot open a Linux path like /tmp/...
+	// Convert to a Windows UNC path via wslpath so it can access the file.
+	templateArg := tmpPath
+	if strings.HasSuffix(opPath, ".exe") {
+		if winPath, err := wslToWindowsPath(ctx, tmpPath); err == nil {
+			templateArg = winPath
+		}
+	}
+
 	cmd := exec.CommandContext(ctx, opPath, "item", "create",
-		"--template", tmpPath,
+		"--template", templateArg,
 		"--vault", vault,
 	)
 	out, err := cmd.CombinedOutput()
@@ -358,6 +367,16 @@ func StorePEMIn1Password(ctx context.Context, opPath, pemContent, slug, vault st
 	}
 
 	return fmt.Sprintf("op://%s/%s/private key", vault, title), nil
+}
+
+// wslToWindowsPath converts a Linux path to a Windows UNC path using wslpath,
+// so that Windows binaries (e.g. op.exe) can access files on the WSL2 filesystem.
+func wslToWindowsPath(ctx context.Context, linuxPath string) (string, error) {
+	out, err := exec.CommandContext(ctx, "wslpath", "-w", linuxPath).Output()
+	if err != nil {
+		return "", fmt.Errorf("wslpath: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 // deleteExistingOPItem looks up an item by title and deletes it if found.
