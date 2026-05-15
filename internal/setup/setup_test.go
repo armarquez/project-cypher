@@ -549,8 +549,11 @@ func TestRun_EndToEnd_1Password(t *testing.T) {
 	}))
 	defer fakeAPI.Close()
 
-	// Fake `op` binary that handles whoami (auth check) and item create.
-	fakeOp := writeFakeOpCreate(t, "exit 0")
+	// Fake `op` binary: account list returns a fake account; item create succeeds.
+	fakeOp := writeFakeOpCreate(t, `
+if [ "$1" = "account" ] && [ "$2" = "list" ]; then echo "test.1password.com"; exit 0; fi
+exit 0
+`)
 
 	dir := t.TempDir()
 	var stdout strings.Builder
@@ -793,8 +796,8 @@ func TestRun_Resume_HasInstall_NoPEM(t *testing.T) {
 // PEMStorage=1password and the op CLI is not authenticated, without starting
 // the GitHub App browser flow.
 func TestRun_1PasswordPreflight_Fails(t *testing.T) {
-	// Fake op that is not signed in.
-	fakeOp := writeFakeOpCreate(t, "echo '[ERROR] account is not signed in' >&2; exit 1")
+	// Fake op: account list fails (desktop app not running, no session).
+	fakeOp := writeFakeOpCreate(t, "echo '[ERROR] no accounts found' >&2; exit 1")
 
 	// The fake API should NOT be called if the preflight fails first.
 	apiCalled := false
