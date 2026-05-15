@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -35,6 +36,9 @@ type Config struct {
 	EnvPath string
 	// CypherDir is the directory for Cypher runtime artifacts (e.g. .cypher/).
 	CypherDir string
+	// AppName overrides the default GitHub App name ("cypher-{owner}-{repo}").
+	// Use this when the default name is already taken (e.g. after a failed setup).
+	AppName string
 	// APIBase overrides the GitHub API base URL (for tests).
 	APIBase string
 	// Client is the HTTP client to use (defaults to http.DefaultClient).
@@ -100,6 +104,27 @@ func (c *Config) opBin() string {
 	return "op"
 }
 
+func (c *Config) appName(owner, repo string) string {
+	if c.AppName != "" {
+		return c.AppName
+	}
+	return fmt.Sprintf("cypher-%s-%s", owner, repo)
+}
+
+func (c *Config) envPath() string {
+	if c.EnvPath != "" {
+		return c.EnvPath
+	}
+	return ".env"
+}
+
+func (c *Config) cypherDir() string {
+	if c.CypherDir != "" {
+		return c.CypherDir
+	}
+	return ".cypher"
+}
+
 // AppCredentials holds everything returned by the GitHub App manifest exchange.
 type AppCredentials struct {
 	AppID         int64
@@ -120,10 +145,10 @@ type Manifest struct {
 	DefaultPermissions map[string]string `json:"default_permissions"`
 }
 
-// GenerateManifest builds the App manifest for the given owner/repo and callback URL.
-func GenerateManifest(owner, repo, callbackURL string) Manifest {
+// GenerateManifest builds the App manifest for the given app name, owner/repo, and callback URL.
+func GenerateManifest(appName, owner, repo, callbackURL string) Manifest {
 	return Manifest{
-		Name:        fmt.Sprintf("cypher-%s-%s", owner, repo),
+		Name:        appName,
 		URL:         fmt.Sprintf("https://github.com/%s/%s", owner, repo),
 		Description: fmt.Sprintf("Cypher orchestration agent for %s/%s", owner, repo),
 		RedirectURL: callbackURL,
@@ -347,6 +372,7 @@ func WriteCredentials(envPath, cypherDir string, creds *AppCredentials, installI
 	if strings.HasPrefix(pemRef, "op://") {
 		updates = map[string]string{
 			"CYPHER_GH_APP_ID":          fmt.Sprintf("%d", creds.AppID),
+			"CYPHER_GH_APP_SLUG":        creds.Slug,
 			"CYPHER_GH_INSTALLATION_ID": fmt.Sprintf("%d", installID),
 			"CYPHER_GH_APP_PRIVATE_KEY": pemRef,
 		}
@@ -359,6 +385,7 @@ func WriteCredentials(envPath, cypherDir string, creds *AppCredentials, installI
 		}
 		updates = map[string]string{
 			"CYPHER_GH_APP_ID":               fmt.Sprintf("%d", creds.AppID),
+			"CYPHER_GH_APP_SLUG":             creds.Slug,
 			"CYPHER_GH_INSTALLATION_ID":      fmt.Sprintf("%d", installID),
 			"CYPHER_GH_APP_PRIVATE_KEY_FILE": pemRef,
 		}
@@ -368,6 +395,60 @@ func WriteCredentials(envPath, cypherDir string, creds *AppCredentials, installI
 		return fmt.Errorf("update .env: %w", err)
 	}
 	return nil
+}
+
+// readEnvFile reads key=value pairs from path into a map.
+// Returns an empty map when the file is absent or unreadable.
+func readEnvFile(path string) map[string]string {
+	result := make(map[string]string)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return result
+	}
+	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	for scanner.Scan() {
+		line := scanner.Text()
+		key, value, found := strings.Cut(line, "=")
+		if found {
+			result[strings.TrimSpace(key)] = strings.TrimSpace(value)
+		}
+	}
+	return result
+}
+
+func parseInt64OrZero(s string) int64 {
+	n, _ := strconv.ParseInt(s, 10, 64)
+	return n
+}
+
+// recoverPEM guides the user to generate a new private key for an existing GitHub App
+// (used when the original PEM from the manifest exchange was not saved before a failure).
+// The user is directed to the App settings page and prompted for the path to a downloaded .pem file.
+func recoverPEM(ctx context.Context, cfg Config, slug string, out io.Writer) (string, error) {
+	settingsURL := "https://github.com/settings/apps/" + slug
+	fmt.Fprintf(out, "\n  The original private key is no longer available.\n")
+	fmt.Fprintf(out, "  Generate a new one:\n")
+	fmt.Fprintf(out, "    1. Visit: %s\n", settingsURL)
+	fmt.Fprintf(out, "    2. Scroll to \"Private keys\" → click \"Generate a private key\"\n")
+	fmt.Fprintf(out, "    3. GitHub will download a .pem file\n\n")
+
+	if cfg.OnServerReady == nil {
+		if err := openBrowser(settingsURL); err != nil {
+			fmt.Fprintf(out, "  Could not open browser automatically.\n")
+		}
+	}
+
+	fmt.Fprintf(out, "  Enter path to the downloaded .pem file: ")
+	scanner := bufio.NewScanner(cfg.stdin())
+	if scanner.Scan() {
+		path := strings.TrimSpace(scanner.Text())
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("read PEM file %q: %w", path, err)
+		}
+		return string(data), nil
+	}
+	return "", fmt.Errorf("no PEM file path provided")
 }
 
 // updateEnvFile reads envPath (creating it if absent), updates or appends the
@@ -383,7 +464,6 @@ func updateEnvFile(path string, updates map[string]string) error {
 			if found {
 				key = strings.TrimSpace(key)
 				if _, ok := updates[key]; ok {
-					// Replace this line; emit the updated value below.
 					continue
 				}
 			}
@@ -414,7 +494,9 @@ func promptPEMStorage(r io.Reader, w io.Writer) string {
 	return "1password"
 }
 
-// Run executes the full setup flow: manifest → callback → exchange → install → store credentials.
+// Run executes the full setup flow with resume support.
+// If a previous run wrote partial credentials to .env, it resumes from the
+// last completed step rather than starting over.
 func Run(ctx context.Context, cfg Config) error {
 	owner, repo, err := config.ParseRepo(cfg.TargetRepo)
 	if err != nil {
@@ -422,21 +504,139 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 
 	out := cfg.stdout()
+	envPath := cfg.envPath()
+	cypherDir := cfg.cypherDir()
 
-	// Step 1: Start callback server.
+	// --- Detect existing state for resume ---
+	existing := readEnvFile(envPath)
+	existingAppID := parseInt64OrZero(existing["CYPHER_GH_APP_ID"])
+	existingSlug := existing["CYPHER_GH_APP_SLUG"]
+	existingInstallID := parseInt64OrZero(existing["CYPHER_GH_INSTALLATION_ID"])
+	hasPEM := existing["CYPHER_GH_APP_PRIVATE_KEY"] != "" || existing["CYPHER_GH_APP_PRIVATE_KEY_FILE"] != ""
+
+	if existingAppID > 0 && existingInstallID > 0 && hasPEM {
+		fmt.Fprintf(out, "GitHub App already configured (app_id: %d).\n", existingAppID)
+		fmt.Fprintf(out, "Run `cypher doctor` to verify your environment.\n")
+		return nil
+	}
+
+	if existingAppID > 0 && existingSlug != "" {
+		fmt.Fprintf(out, "Resuming setup for existing App (app_id: %d).\n\n", existingAppID)
+	}
+
+	// --- Step 1: Get App credentials (manifest flow or resume) ---
+	var (
+		creds      *AppCredentials
+		pemContent string // in-memory PEM, only available right after exchange
+	)
+
+	if existingAppID > 0 && existingSlug != "" {
+		creds = &AppCredentials{AppID: existingAppID, Slug: existingSlug}
+	} else {
+		creds, err = runManifestFlow(ctx, cfg, owner, repo, out)
+		if err != nil {
+			return err
+		}
+		pemContent = creds.PEM
+
+		// Write partial credentials immediately so that a failure in later steps
+		// allows the next run to skip the manifest flow entirely.
+		if err = updateEnvFile(envPath, map[string]string{
+			"CYPHER_GH_APP_ID":   fmt.Sprintf("%d", creds.AppID),
+			"CYPHER_GH_APP_SLUG": creds.Slug,
+		}); err != nil {
+			return fmt.Errorf("write partial credentials: %w", err)
+		}
+	}
+
+	// --- Step 2: Get installation ID (poll or resume) ---
+	var installID int64
+	if existingInstallID > 0 {
+		installID = existingInstallID
+		fmt.Fprintf(out, "Step 2: Install app\n")
+		fmt.Fprintf(out, "  ✓ Already installed (installation_id: %d)\n\n", installID)
+	} else {
+		// JWT requires the PEM. If we don't have it (resume case), recover it first.
+		if pemContent == "" {
+			fmt.Fprintf(out, "Step 2: Install app\n")
+			pemContent, err = recoverPEM(ctx, cfg, creds.Slug, out)
+			if err != nil {
+				return fmt.Errorf("recover PEM for installation poll: %w", err)
+			}
+		}
+
+		installID, err = runInstallFlow(ctx, cfg, creds, pemContent, owner, out)
+		if err != nil {
+			return err
+		}
+
+		// Write installation ID immediately.
+		if err = updateEnvFile(envPath, map[string]string{
+			"CYPHER_GH_INSTALLATION_ID": fmt.Sprintf("%d", installID),
+		}); err != nil {
+			return fmt.Errorf("write installation ID: %w", err)
+		}
+	}
+
+	// --- Step 3: Store PEM ---
+	if hasPEM {
+		fmt.Fprintf(out, "Setup complete. Run `cypher doctor` to verify your environment.\n")
+		return nil
+	}
+
+	// If the PEM is still in memory (fresh run), use it. Otherwise recover.
+	if pemContent == "" {
+		fmt.Fprintf(out, "Step 3: Store private key\n")
+		pemContent, err = recoverPEM(ctx, cfg, creds.Slug, out)
+		if err != nil {
+			return fmt.Errorf("recover PEM: %w", err)
+		}
+	}
+	creds.PEM = pemContent
+
+	pemRef, err := resolvePEMStorage(ctx, cfg, creds, cypherDir, out)
+	if err != nil {
+		return err
+	}
+
+	if err = WriteCredentials(envPath, cypherDir, creds, installID, pemRef); err != nil {
+		return fmt.Errorf("write credentials: %w", err)
+	}
+
+	stepN := "Step 3"
+	if strings.HasPrefix(pemRef, "op://") {
+		stepN = "Step 4"
+	}
+	fmt.Fprintf(out, "%s: Write credentials\n", stepN)
+	fmt.Fprintf(out, "  ✓ %s updated:\n", envPath)
+	fmt.Fprintf(out, "      CYPHER_GH_APP_ID=%d\n", creds.AppID)
+	if strings.HasPrefix(pemRef, "op://") {
+		fmt.Fprintf(out, "      CYPHER_GH_APP_PRIVATE_KEY=%s\n", pemRef)
+	} else {
+		fmt.Fprintf(out, "      CYPHER_GH_APP_PRIVATE_KEY_FILE=%s\n", pemRef)
+	}
+	fmt.Fprintf(out, "      CYPHER_GH_INSTALLATION_ID=%d\n\n", installID)
+	fmt.Fprintf(out, "Run `cypher doctor` to verify your environment.\n")
+
+	return nil
+}
+
+// runManifestFlow runs the browser-based GitHub App manifest flow and returns credentials.
+func runManifestFlow(ctx context.Context, cfg Config, owner, repo string, out io.Writer) (*AppCredentials, error) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return fmt.Errorf("start callback server: %w", err)
+		return nil, fmt.Errorf("start callback server: %w", err)
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
 	callbackURL := fmt.Sprintf("http://localhost:%d/callback", port)
 
 	state, err := randomHex(16)
 	if err != nil {
-		return fmt.Errorf("generate state: %w", err)
+		return nil, fmt.Errorf("generate state: %w", err)
 	}
 
-	manifest := GenerateManifest(owner, repo, callbackURL)
+	appName := cfg.appName(owner, repo)
+	manifest := GenerateManifest(appName, owner, repo, callbackURL)
 
 	codeCh := make(chan string, 1)
 	var once sync.Once
@@ -458,10 +658,9 @@ func Run(ctx context.Context, cfg Config) error {
 		go cfg.OnServerReady(port)
 	}
 
-	// Step 2: Open browser.
 	localURL := fmt.Sprintf("http://localhost:%d/", port)
 	fmt.Fprintf(out, "\nStep 1: Create GitHub App\n")
-	fmt.Fprintf(out, "  App name: cypher-%s-%s\n", owner, repo)
+	fmt.Fprintf(out, "  App name: %s\n", appName)
 	fmt.Fprintf(out, "  Opening %s in your browser.\n", localURL)
 	fmt.Fprintf(out, "  Review the permissions and click \"Create GitHub App\" to continue.\n\n")
 	fmt.Fprintf(out, "  Waiting for callback... (ctrl-c to cancel)\n\n")
@@ -473,29 +672,39 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 	}
 
-	// Step 3: Wait for code.
 	var code string
 	select {
 	case code = <-codeCh:
 	case <-ctx.Done():
-		return ctx.Err()
+		return nil, ctx.Err()
 	case <-time.After(10 * time.Minute):
-		return fmt.Errorf("timed out waiting for GitHub callback")
+		return nil, fmt.Errorf("timed out waiting for GitHub callback")
 	}
 	if code == "" {
-		return fmt.Errorf("GitHub returned empty code — setup cancelled or failed")
+		return nil, fmt.Errorf("GitHub returned empty code — setup cancelled or failed")
 	}
 
-	// Step 4: Exchange code.
 	creds, err := ExchangeCode(ctx, cfg.client(), cfg.apiBase(), code)
 	if err != nil {
-		return fmt.Errorf("exchange code: %w", err)
+		return nil, fmt.Errorf("exchange code: %w", err)
 	}
 	fmt.Fprintf(out, "  ✓ App created (app_id: %d)\n\n", creds.AppID)
+	return creds, nil
+}
 
-	// Step 5: Open installation URL.
+// runInstallFlow opens the installation URL and polls until the app is installed.
+func runInstallFlow(ctx context.Context, cfg Config, creds *AppCredentials, pemContent, owner string, out io.Writer) (int64, error) {
+	privateKey, err := ParsePrivateKey(pemContent)
+	if err != nil {
+		return 0, fmt.Errorf("parse app private key: %w", err)
+	}
+	jwtToken, err := MakeJWT(creds.AppID, privateKey)
+	if err != nil {
+		return 0, fmt.Errorf("generate JWT: %w", err)
+	}
+
 	installURL := fmt.Sprintf("https://github.com/apps/%s/installations/new", creds.Slug)
-	fmt.Fprintf(out, "Step 2: Install app on %s/%s\n", owner, repo)
+	fmt.Fprintf(out, "Step 2: Install app on %s\n", owner)
 	fmt.Fprintf(out, "  Opening %s\n", installURL)
 	fmt.Fprintf(out, "  Click \"Install\" to grant access to the repository.\n\n")
 	fmt.Fprintf(out, "  Waiting...\n\n")
@@ -506,46 +715,31 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 	}
 
-	// Step 6: Poll for installation.
-	privateKey, err := ParsePrivateKey(creds.PEM)
-	if err != nil {
-		return fmt.Errorf("parse app private key: %w", err)
-	}
-	jwtToken, err := MakeJWT(creds.AppID, privateKey)
-	if err != nil {
-		return fmt.Errorf("generate JWT: %w", err)
-	}
-
 	installID, err := PollInstallation(ctx, cfg.client(), cfg.apiBase(), jwtToken, owner)
 	if err != nil {
-		return fmt.Errorf("poll installation: %w", err)
+		return 0, fmt.Errorf("poll installation: %w", err)
 	}
 	fmt.Fprintf(out, "  ✓ Installed (installation_id: %d)\n\n", installID)
+	return installID, nil
+}
 
-	envPath := cfg.EnvPath
-	if envPath == "" {
-		envPath = ".env"
-	}
-	cypherDir := cfg.CypherDir
-	if cypherDir == "" {
-		cypherDir = ".cypher"
-	}
-
-	// Step 7: Determine PEM storage and store the key.
-	// Resolve the storage mode: explicit flag > test mode default > interactive prompt.
+// resolvePEMStorage determines the PEM storage mode, stores the key, and returns the pemRef.
+func resolvePEMStorage(ctx context.Context, cfg Config, creds *AppCredentials, cypherDir string, out io.Writer) (string, error) {
 	pemStorage := cfg.PEMStorage
-	if pemStorage == "" && cfg.OnServerReady != nil {
-		pemStorage = "file" // test mode: avoid blocking on stdin
+	if pemStorage == "" {
+		if cfg.OnServerReady != nil {
+			pemStorage = "file"
+		}
 	}
 
 	var pemRef string
 	storeInOP := func() error {
 		vault := cfg.opVault()
 		fmt.Fprintf(out, "  Storing in 1Password vault %q...\n", vault)
-		var opErr error
-		pemRef, opErr = StorePEMIn1Password(ctx, cfg.opBin(), creds.PEM, creds.Slug, vault)
-		if opErr != nil {
-			return fmt.Errorf("store PEM in 1Password: %w", opErr)
+		var err error
+		pemRef, err = StorePEMIn1Password(ctx, cfg.opBin(), creds.PEM, creds.Slug, vault)
+		if err != nil {
+			return fmt.Errorf("store PEM in 1Password: %w", err)
 		}
 		fmt.Fprintf(out, "  ✓ Stored: %s\n\n", pemRef)
 		return nil
@@ -554,43 +748,22 @@ func Run(ctx context.Context, cfg Config) error {
 	switch pemStorage {
 	case "1password":
 		fmt.Fprintf(out, "Step 3: Store private key\n")
-		if err = storeInOP(); err != nil {
-			return err
+		if err := storeInOP(); err != nil {
+			return "", err
 		}
 	case "file":
 		pemRef = filepath.Join(cypherDir, "app-key.pem")
 	default:
-		// Interactive prompt.
 		fmt.Fprintf(out, "Step 3: Store private key\n")
 		if promptPEMStorage(cfg.stdin(), out) == "1password" {
-			if err = storeInOP(); err != nil {
-				return err
+			if err := storeInOP(); err != nil {
+				return "", err
 			}
 		} else {
 			pemRef = filepath.Join(cypherDir, "app-key.pem")
 		}
 	}
-
-	if err = WriteCredentials(envPath, cypherDir, creds, installID, pemRef); err != nil {
-		return fmt.Errorf("write credentials: %w", err)
-	}
-
-	stepLabel := "Step 3"
-	if pemStorage == "1password" || strings.HasPrefix(pemRef, "op://") {
-		stepLabel = "Step 4"
-	}
-	fmt.Fprintf(out, "%s: Write credentials\n", stepLabel)
-	fmt.Fprintf(out, "  ✓ %s updated:\n", envPath)
-	fmt.Fprintf(out, "      CYPHER_GH_APP_ID=%d\n", creds.AppID)
-	if strings.HasPrefix(pemRef, "op://") {
-		fmt.Fprintf(out, "      CYPHER_GH_APP_PRIVATE_KEY=%s\n", pemRef)
-	} else {
-		fmt.Fprintf(out, "      CYPHER_GH_APP_PRIVATE_KEY_FILE=%s\n", pemRef)
-	}
-	fmt.Fprintf(out, "      CYPHER_GH_INSTALLATION_ID=%d\n\n", installID)
-	fmt.Fprintf(out, "Run `cypher doctor` to verify your environment.\n")
-
-	return nil
+	return pemRef, nil
 }
 
 func randomHex(n int) (string, error) {

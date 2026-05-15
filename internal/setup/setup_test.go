@@ -22,7 +22,7 @@ import (
 // --- GenerateManifest ---
 
 func TestGenerateManifest(t *testing.T) {
-	m := GenerateManifest("myorg", "myrepo", "http://localhost:9999/callback")
+	m := GenerateManifest("cypher-myorg-myrepo", "myorg", "myrepo", "http://localhost:9999/callback")
 	if m.Name != "cypher-myorg-myrepo" {
 		t.Errorf("Name = %q", m.Name)
 	}
@@ -635,5 +635,185 @@ func TestRun_InvalidTargetRepo(t *testing.T) {
 	err := Run(context.Background(), cfg)
 	if err == nil {
 		t.Fatal("expected error for invalid target_repo")
+	}
+}
+
+// --- readEnvFile ---
+
+func TestReadEnvFile_NonExistent(t *testing.T) {
+	m := readEnvFile("/nonexistent/path/.env")
+	if len(m) != 0 {
+		t.Errorf("expected empty map for missing file, got %v", m)
+	}
+}
+
+func TestReadEnvFile_ParsesKeyValue(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".env")
+	os.WriteFile(path, []byte("KEY1=val1\nKEY2=val2\nNO_EQUALS\n"), 0o600) //nolint:errcheck
+	m := readEnvFile(path)
+	if m["KEY1"] != "val1" {
+		t.Errorf("KEY1 = %q, want val1", m["KEY1"])
+	}
+	if m["KEY2"] != "val2" {
+		t.Errorf("KEY2 = %q, want val2", m["KEY2"])
+	}
+	if _, ok := m["NO_EQUALS"]; ok {
+		t.Error("line without '=' should not produce a key")
+	}
+}
+
+func TestReadEnvFile_UpdatePreservesExtraVars(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".env")
+	os.WriteFile(path, []byte("A=1\nB=2\n"), 0o600) //nolint:errcheck
+	if err := updateEnvFile(path, map[string]string{"A": "updated"}); err != nil {
+		t.Fatalf("updateEnvFile: %v", err)
+	}
+	m := readEnvFile(path)
+	if m["A"] != "updated" {
+		t.Errorf("A = %q, want updated", m["A"])
+	}
+	if m["B"] != "2" {
+		t.Errorf("B = %q, want 2", m["B"])
+	}
+}
+
+// --- parseInt64OrZero ---
+
+func TestParseInt64OrZero(t *testing.T) {
+	cases := []struct {
+		in   string
+		want int64
+	}{
+		{"42", 42},
+		{"0", 0},
+		{"", 0},
+		{"notanumber", 0},
+		{"-1", -1},
+	}
+	for _, tc := range cases {
+		if got := parseInt64OrZero(tc.in); got != tc.want {
+			t.Errorf("parseInt64OrZero(%q) = %d, want %d", tc.in, got, tc.want)
+		}
+	}
+}
+
+// --- recoverPEM ---
+
+func TestRecoverPEM_ReadsFromFile(t *testing.T) {
+	dir := t.TempDir()
+	pemFile := filepath.Join(dir, "test.pem")
+	pemContent := "-----BEGIN RSA PRIVATE KEY-----\nfake\n-----END RSA PRIVATE KEY-----\n"
+	os.WriteFile(pemFile, []byte(pemContent), 0o600) //nolint:errcheck
+
+	var out strings.Builder
+	cfg := Config{
+		Stdin:         strings.NewReader(pemFile + "\n"),
+		OnServerReady: func(int) {}, // skip openBrowser
+	}
+	got, err := recoverPEM(context.Background(), cfg, "test-slug", &out)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != pemContent {
+		t.Errorf("unexpected PEM: %q", got)
+	}
+}
+
+func TestRecoverPEM_MissingFile(t *testing.T) {
+	cfg := Config{
+		Stdin:         strings.NewReader("/nonexistent/path.pem\n"),
+		OnServerReady: func(int) {},
+	}
+	var out strings.Builder
+	_, err := recoverPEM(context.Background(), cfg, "slug", &out)
+	if err == nil {
+		t.Fatal("expected error for missing PEM file")
+	}
+}
+
+// --- Run resume scenarios ---
+
+func TestRun_AlreadyConfigured(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	os.WriteFile(envPath, []byte( //nolint:errcheck
+		"CYPHER_GH_APP_ID=42\n"+
+			"CYPHER_GH_INSTALLATION_ID=99\n"+
+			"CYPHER_GH_APP_PRIVATE_KEY=op://vault/item/field\n",
+	), 0o600)
+
+	var stdout strings.Builder
+	cfg := Config{
+		TargetRepo:    "https://github.com/testorg/testrepo",
+		EnvPath:       envPath,
+		Stdout:        &stdout,
+		OnServerReady: func(int) {},
+	}
+	if err := Run(context.Background(), cfg); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "already configured") {
+		t.Errorf("expected 'already configured' in output: %s", stdout.String())
+	}
+}
+
+func TestRun_Resume_HasInstall_NoPEM(t *testing.T) {
+	// Setup: app_id + slug + install_id present, no PEM → should skip to PEM storage step.
+	privKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	pemBytes := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(privKey),
+	})
+
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	// Write a .pem file for recoverPEM to read.
+	pemFilePath := filepath.Join(dir, "recovered.pem")
+	os.WriteFile(pemFilePath, pemBytes, 0o600) //nolint:errcheck
+
+	os.WriteFile(envPath, []byte( //nolint:errcheck
+		"CYPHER_GH_APP_ID=42\n"+
+			"CYPHER_GH_APP_SLUG=cypher-testorg-testrepo\n"+
+			"CYPHER_GH_INSTALLATION_ID=99\n",
+	), 0o600)
+
+	var stdout strings.Builder
+	cfg := Config{
+		TargetRepo:    "https://github.com/testorg/testrepo",
+		EnvPath:       envPath,
+		CypherDir:     filepath.Join(dir, ".cypher"),
+		Stdout:        &stdout,
+		Stdin:         strings.NewReader(pemFilePath + "\n"),
+		OnServerReady: func(int) {},
+		PEMStorage:    "file",
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := Run(ctx, cfg); err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	// Verify PEM was stored.
+	pemOnDisk := filepath.Join(dir, ".cypher", "app-key.pem")
+	if _, err := os.Stat(pemOnDisk); err != nil {
+		t.Errorf("expected PEM on disk: %v", err)
+	}
+
+	// Verify .env has the PEM file reference.
+	envData, _ := os.ReadFile(envPath)
+	env := string(envData)
+	if !strings.Contains(env, "CYPHER_GH_APP_PRIVATE_KEY_FILE=") {
+		t.Errorf(".env missing CYPHER_GH_APP_PRIVATE_KEY_FILE:\n%s", env)
+	}
+	// Existing install ID should be preserved.
+	if !strings.Contains(env, "CYPHER_GH_INSTALLATION_ID=99") {
+		t.Errorf(".env missing CYPHER_GH_INSTALLATION_ID=99:\n%s", env)
 	}
 }
