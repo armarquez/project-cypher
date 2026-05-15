@@ -99,6 +99,7 @@ func runSetup(args []string) {
 	cfgPath := fs.String("config", envOrDefault("CYPHER_CONFIG", "configs/project-cypher.yaml"), "project config YAML")
 	envPath := fs.String("env", ".env", "path to .env file to write credentials into")
 	cypherDir := fs.String("cypher-dir", ".cypher", "directory for Cypher runtime artifacts")
+	appName := fs.String("app-name", "", `GitHub App name (default: "cypher-{owner}-{repo}"); use when the default name is already taken`)
 	pemStorage := fs.String("pem-storage", "", `where to store the GitHub App private key: "file" or "1password" (default: prompt interactively)`)
 	opVault := fs.String("op-vault", "Private", `1Password vault name (used when --pem-storage=1password)`)
 	fs.Parse(args) //nolint:errcheck
@@ -113,6 +114,7 @@ func runSetup(args []string) {
 		TargetRepo: cfg.TargetRepo,
 		EnvPath:    *envPath,
 		CypherDir:  *cypherDir,
+		AppName:    *appName,
 		PEMStorage: *pemStorage,
 		OPVault:    *opVault,
 	}); err != nil {
