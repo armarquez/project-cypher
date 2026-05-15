@@ -84,23 +84,6 @@ func TestExchangeCode_NonCreated(t *testing.T) {
 	}
 }
 
-// --- ParsePrivateKey ---
-
-func TestParsePrivateKey_InvalidPEM(t *testing.T) {
-	_, err := ParsePrivateKey("not a pem")
-	if err == nil {
-		t.Fatal("expected error for invalid PEM")
-	}
-}
-
-func TestParsePrivateKey_InvalidKeyData(t *testing.T) {
-	pemData := "-----BEGIN RSA PRIVATE KEY-----\naW52YWxpZA==\n-----END RSA PRIVATE KEY-----"
-	_, err := ParsePrivateKey(pemData)
-	if err == nil {
-		t.Fatal("expected error for invalid RSA key data")
-	}
-}
-
 // --- MakeJWT ---
 
 func TestMakeJWT(t *testing.T) {
@@ -108,12 +91,16 @@ func TestMakeJWT(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generate key: %v", err)
 	}
+	pemBytes := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(key),
+	})
 
-	jwt, err := MakeJWT(12345, key)
+	tok, err := MakeJWT(12345, string(pemBytes))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	parts := strings.Split(jwt, ".")
+	parts := strings.Split(tok, ".")
 	if len(parts) != 3 {
 		t.Fatalf("expected 3 JWT parts, got %d", len(parts))
 	}
@@ -134,6 +121,13 @@ func TestMakeJWT(t *testing.T) {
 	}
 	if _, ok := claims["exp"]; !ok {
 		t.Error("missing exp claim")
+	}
+}
+
+func TestMakeJWT_InvalidPEM(t *testing.T) {
+	_, err := MakeJWT(1, "not a pem")
+	if err == nil {
+		t.Fatal("expected error for invalid PEM")
 	}
 }
 

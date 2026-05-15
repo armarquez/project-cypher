@@ -2,11 +2,17 @@ package github
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // captureRequest starts a server that records every request header and
@@ -94,6 +100,158 @@ func TestNewClient_CustomBaseURL(t *testing.T) {
 	c := NewClient("tok", http.DefaultClient, "http://localhost:9999")
 	if c.baseURL != "http://localhost:9999" {
 		t.Errorf("baseURL = %q, want custom URL", c.baseURL)
+	}
+}
+
+// --- NewClientFromApp / InstallationTransport ---
+
+func generateTestPEM(t *testing.T) []byte {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate RSA key: %v", err)
+	}
+	return pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(key),
+	})
+}
+
+func TestNewClientFromApp_InvalidPEM(t *testing.T) {
+	_, err := NewClientFromApp(1, 2, []byte("not a pem"), nil, "")
+	if err == nil {
+		t.Fatal("expected error for invalid PEM")
+	}
+}
+
+func TestNewClientFromApp_ValidPEM(t *testing.T) {
+	pemData := generateTestPEM(t)
+	c, err := NewClientFromApp(1, 2, pemData, nil, "http://localhost:9999")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if c.baseURL != "http://localhost:9999" {
+		t.Errorf("baseURL = %q", c.baseURL)
+	}
+	if c.token != "" {
+		t.Error("App client should have empty static token")
+	}
+}
+
+func TestNewClientFromApp_DefaultBaseURL(t *testing.T) {
+	pemData := generateTestPEM(t)
+	c, err := NewClientFromApp(1, 2, pemData, nil, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if c.baseURL != defaultBaseURL {
+		t.Errorf("baseURL = %q, want %q", c.baseURL, defaultBaseURL)
+	}
+}
+
+func TestInstallationTransport_FetchesAndCachesToken(t *testing.T) {
+	pemData := generateTestPEM(t)
+	calls := 0
+
+	// Fake GitHub API: handles JWT-authenticated token exchange.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "/access_tokens") {
+			http.NotFound(w, r)
+			return
+		}
+		calls++
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprintf(w, `{"token":"ghs_test","expires_at":%q}`,
+			time.Now().Add(time.Hour).Format(time.RFC3339))
+	}))
+	defer srv.Close()
+
+	c, err := NewClientFromApp(42, 7, pemData, srv.Client(), srv.URL)
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+
+	tr := c.httpClient.Transport.(*InstallationTransport)
+	tok1, err := tr.getToken(context.Background())
+	if err != nil {
+		t.Fatalf("first getToken: %v", err)
+	}
+	if tok1 != "ghs_test" {
+		t.Errorf("token = %q, want ghs_test", tok1)
+	}
+	if calls != 1 {
+		t.Errorf("expected 1 API call, got %d", calls)
+	}
+
+	// Second call should use the cached token.
+	tok2, err := tr.getToken(context.Background())
+	if err != nil {
+		t.Fatalf("second getToken: %v", err)
+	}
+	if tok2 != tok1 {
+		t.Errorf("expected cached token on second call")
+	}
+	if calls != 1 {
+		t.Errorf("expected still 1 API call after cache hit, got %d", calls)
+	}
+}
+
+func TestInstallationTransport_RefreshesExpiredToken(t *testing.T) {
+	pemData := generateTestPEM(t)
+	calls := 0
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "/access_tokens") {
+			http.NotFound(w, r)
+			return
+		}
+		calls++
+		// Return an already-expired token so the next call always refreshes.
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprintf(w, `{"token":"ghs_v%d","expires_at":%q}`,
+			calls, time.Now().Add(-time.Minute).Format(time.RFC3339))
+	}))
+	defer srv.Close()
+
+	c, _ := NewClientFromApp(1, 2, pemData, srv.Client(), srv.URL)
+	tr := c.httpClient.Transport.(*InstallationTransport)
+
+	tr.getToken(context.Background()) //nolint:errcheck — first fetch
+	tr.getToken(context.Background()) //nolint:errcheck — should refresh (expired)
+
+	if calls < 2 {
+		t.Errorf("expected at least 2 token fetches for expired tokens, got %d", calls)
+	}
+}
+
+func TestInstallationTransport_InjectsTokenHeader(t *testing.T) {
+	pemData := generateTestPEM(t)
+	var capturedAuth string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/access_tokens") {
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprintf(w, `{"token":"ghs_injected","expires_at":%q}`,
+				time.Now().Add(time.Hour).Format(time.RFC3339))
+			return
+		}
+		capturedAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("[]")) //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	c, err := NewClientFromApp(1, 2, pemData, srv.Client(), srv.URL)
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	c.do(context.Background(), "/repos/o/r/issues", &[]any{}) //nolint:errcheck
+
+	if !strings.HasPrefix(capturedAuth, "token ") {
+		t.Errorf("Authorization = %q, want 'token ghs_injected'", capturedAuth)
+	}
+	if !strings.Contains(capturedAuth, "ghs_injected") {
+		t.Errorf("Authorization = %q, want ghs_injected token", capturedAuth)
 	}
 }
 

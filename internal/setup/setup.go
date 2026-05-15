@@ -4,12 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto"
 	"crypto/rand"
-	"crypto/rsa"
-	"crypto/sha256"
 	"crypto/x509"
-	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -26,6 +22,7 @@ import (
 	"time"
 
 	"github.com/armarquez/project-cypher/internal/config"
+	"github.com/golang-jwt/jwt/v4"
 )
 
 // Config is all the inputs Run needs.
@@ -208,40 +205,29 @@ func ExchangeCode(ctx context.Context, client *http.Client, apiBase, code string
 	}, nil
 }
 
-// ParsePrivateKey parses an RSA private key from PEM-encoded data.
-func ParsePrivateKey(pemData string) (*rsa.PrivateKey, error) {
+// MakeJWT creates a GitHub App JWT (RS256, valid 10 minutes) for the given app ID.
+// pemData is the PEM-encoded RSA private key returned by GitHub during App creation.
+func MakeJWT(appID int64, pemData string) (string, error) {
 	block, _ := pem.Decode([]byte(pemData))
 	if block == nil {
-		return nil, fmt.Errorf("no PEM block found")
+		return "", fmt.Errorf("no PEM block found in private key")
 	}
 	key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
 	if err != nil {
-		return nil, fmt.Errorf("parse RSA key: %w", err)
+		return "", fmt.Errorf("parse RSA key: %w", err)
 	}
-	return key, nil
-}
 
-// MakeJWT creates a GitHub App JWT (RS256, valid 10 minutes) for the given app ID.
-func MakeJWT(appID int64, key *rsa.PrivateKey) (string, error) {
 	now := time.Now()
-	headerJSON, _ := json.Marshal(map[string]string{"alg": "RS256", "typ": "JWT"})
-	payloadJSON, _ := json.Marshal(map[string]interface{}{
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
 		"iat": now.Add(-60 * time.Second).Unix(),
 		"exp": now.Add(10 * time.Minute).Unix(),
 		"iss": fmt.Sprintf("%d", appID),
 	})
-
-	b64 := base64.RawURLEncoding
-	header := b64.EncodeToString(headerJSON)
-	payload := b64.EncodeToString(payloadJSON)
-	sigInput := header + "." + payload
-
-	hash := sha256.Sum256([]byte(sigInput))
-	sig, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, hash[:])
+	signed, err := token.SignedString(key)
 	if err != nil {
 		return "", fmt.Errorf("sign JWT: %w", err)
 	}
-	return sigInput + "." + b64.EncodeToString(sig), nil
+	return signed, nil
 }
 
 // PollInstallation polls GET /app/installations until an installation for owner appears.
@@ -694,11 +680,7 @@ func runManifestFlow(ctx context.Context, cfg Config, owner, repo string, out io
 
 // runInstallFlow opens the installation URL and polls until the app is installed.
 func runInstallFlow(ctx context.Context, cfg Config, creds *AppCredentials, pemContent, owner string, out io.Writer) (int64, error) {
-	privateKey, err := ParsePrivateKey(pemContent)
-	if err != nil {
-		return 0, fmt.Errorf("parse app private key: %w", err)
-	}
-	jwtToken, err := MakeJWT(creds.AppID, privateKey)
+	jwtToken, err := MakeJWT(creds.AppID, pemContent)
 	if err != nil {
 		return 0, fmt.Errorf("generate JWT: %w", err)
 	}
