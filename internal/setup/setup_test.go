@@ -145,20 +145,20 @@ func TestMakeJWT(t *testing.T) {
 
 // --- WriteCredentials ---
 
-func TestWriteCredentials(t *testing.T) {
+func TestWriteCredentials_FileMode(t *testing.T) {
 	dir := t.TempDir()
 	envPath := filepath.Join(dir, ".env")
 	cypherDir := filepath.Join(dir, ".cypher")
+	pemPath := filepath.Join(cypherDir, "app-key.pem")
 
 	creds := &AppCredentials{
 		AppID: 99,
 		PEM:   "-----BEGIN RSA PRIVATE KEY-----\nfake\n-----END RSA PRIVATE KEY-----\n",
 	}
-	if err := WriteCredentials(envPath, cypherDir, creds, 777); err != nil {
+	if err := WriteCredentials(envPath, cypherDir, creds, 777, pemPath); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	pemPath := filepath.Join(cypherDir, "app-key.pem")
 	pemData, err := os.ReadFile(pemPath)
 	if err != nil {
 		t.Fatalf("read PEM: %v", err)
@@ -181,12 +181,48 @@ func TestWriteCredentials(t *testing.T) {
 	if !strings.Contains(env, "CYPHER_GH_APP_PRIVATE_KEY_FILE=") {
 		t.Errorf(".env missing CYPHER_GH_APP_PRIVATE_KEY_FILE, got:\n%s", env)
 	}
+	if strings.Contains(env, "CYPHER_GH_APP_PRIVATE_KEY=") && !strings.Contains(env, "CYPHER_GH_APP_PRIVATE_KEY_FILE=") {
+		t.Error("file mode must use CYPHER_GH_APP_PRIVATE_KEY_FILE, not CYPHER_GH_APP_PRIVATE_KEY")
+	}
+}
+
+func TestWriteCredentials_OPURIMode(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	cypherDir := filepath.Join(dir, ".cypher")
+	opURI := "op://Private/cypher-testorg-testrepo-key/private key"
+
+	creds := &AppCredentials{
+		AppID: 42,
+		PEM:   "-----BEGIN RSA PRIVATE KEY-----\nfake\n-----END RSA PRIVATE KEY-----\n",
+	}
+	if err := WriteCredentials(envPath, cypherDir, creds, 99, opURI); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// No PEM file should exist on disk.
+	if _, err := os.Stat(filepath.Join(cypherDir, "app-key.pem")); !os.IsNotExist(err) {
+		t.Error("expected no app-key.pem on disk in op:// mode")
+	}
+
+	envData, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Fatalf("read .env: %v", err)
+	}
+	env := string(envData)
+	if !strings.Contains(env, "CYPHER_GH_APP_PRIVATE_KEY="+opURI) {
+		t.Errorf(".env missing CYPHER_GH_APP_PRIVATE_KEY=%s, got:\n%s", opURI, env)
+	}
+	if strings.Contains(env, "CYPHER_GH_APP_PRIVATE_KEY_FILE=") {
+		t.Errorf("op:// mode must not write CYPHER_GH_APP_PRIVATE_KEY_FILE, got:\n%s", env)
+	}
 }
 
 func TestWriteCredentials_UpdatesExistingKeys(t *testing.T) {
 	dir := t.TempDir()
 	envPath := filepath.Join(dir, ".env")
 	cypherDir := filepath.Join(dir, ".cypher")
+	pemPath := filepath.Join(cypherDir, "app-key.pem")
 
 	os.WriteFile(envPath, []byte("CYPHER_GH_APP_ID=old\nSOME_OTHER_VAR=keep\n"), 0o600) //nolint:errcheck
 
@@ -194,7 +230,7 @@ func TestWriteCredentials_UpdatesExistingKeys(t *testing.T) {
 		AppID: 123,
 		PEM:   "-----BEGIN RSA PRIVATE KEY-----\nfake\n-----END RSA PRIVATE KEY-----\n",
 	}
-	if err := WriteCredentials(envPath, cypherDir, creds, 456); err != nil {
+	if err := WriteCredentials(envPath, cypherDir, creds, 456, pemPath); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -209,6 +245,73 @@ func TestWriteCredentials_UpdatesExistingKeys(t *testing.T) {
 	}
 	if !strings.Contains(env, "SOME_OTHER_VAR=keep") {
 		t.Errorf(".env dropped SOME_OTHER_VAR, got:\n%s", env)
+	}
+}
+
+// --- StorePEMIn1Password ---
+
+func writeFakeOpCreate(t *testing.T, script string) string {
+	t.Helper()
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "op")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"+script), 0o755); err != nil {
+		t.Fatalf("write fake op: %v", err)
+	}
+	return bin
+}
+
+func TestStorePEMIn1Password_Success(t *testing.T) {
+	bin := writeFakeOpCreate(t, "exit 0")
+
+	uri, err := StorePEMIn1Password(context.Background(), bin,
+		"-----BEGIN RSA PRIVATE KEY-----\nfake\n-----END RSA PRIVATE KEY-----\n",
+		"testorg-testrepo", "Private")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.HasPrefix(uri, "op://Private/cypher-testorg-testrepo-key/") {
+		t.Errorf("unexpected URI: %s", uri)
+	}
+}
+
+func TestStorePEMIn1Password_Failure(t *testing.T) {
+	bin := writeFakeOpCreate(t, "echo 'not signed in' >&2; exit 1")
+
+	_, err := StorePEMIn1Password(context.Background(), bin,
+		"-----BEGIN RSA PRIVATE KEY-----\nfake\n-----END RSA PRIVATE KEY-----\n",
+		"testorg-testrepo", "Private")
+	if err == nil {
+		t.Fatal("expected error when op exits non-zero")
+	}
+}
+
+// --- promptPEMStorage ---
+
+func TestPromptPEMStorage_Default(t *testing.T) {
+	// Empty input → 1password
+	r := strings.NewReader("\n")
+	var w strings.Builder
+	got := promptPEMStorage(r, &w)
+	if got != "1password" {
+		t.Errorf("got %q, want 1password", got)
+	}
+}
+
+func TestPromptPEMStorage_ChooseFile(t *testing.T) {
+	r := strings.NewReader("2\n")
+	var w strings.Builder
+	got := promptPEMStorage(r, &w)
+	if got != "file" {
+		t.Errorf("got %q, want file", got)
+	}
+}
+
+func TestPromptPEMStorage_Choose1Password(t *testing.T) {
+	r := strings.NewReader("1\n")
+	var w strings.Builder
+	got := promptPEMStorage(r, &w)
+	if got != "1password" {
+		t.Errorf("got %q, want 1password", got)
 	}
 }
 
@@ -372,22 +475,24 @@ func TestRun_EndToEnd(t *testing.T) {
 	dir := t.TempDir()
 	var stdout strings.Builder
 
+	onReady := func(port int) {
+		time.Sleep(20 * time.Millisecond)
+		resp, err := http.Get(fmt.Sprintf("http://localhost:%d/callback?code=testcode&state=ok", port))
+		if err == nil {
+			io.Copy(io.Discard, resp.Body) //nolint:errcheck
+			resp.Body.Close()
+		}
+	}
+
 	cfg := Config{
-		TargetRepo: "https://github.com/testorg/testrepo",
-		EnvPath:    filepath.Join(dir, ".env"),
-		CypherDir:  filepath.Join(dir, ".cypher"),
-		APIBase:    fakeAPI.URL,
-		Client:     fakeAPI.Client(),
-		Stdout:     &stdout,
-		OnServerReady: func(port int) {
-			// Simulate GitHub's redirect back to the callback.
-			time.Sleep(20 * time.Millisecond)
-			resp, err := http.Get(fmt.Sprintf("http://localhost:%d/callback?code=testcode&state=ok", port))
-			if err == nil {
-				io.Copy(io.Discard, resp.Body) //nolint:errcheck
-				resp.Body.Close()
-			}
-		},
+		TargetRepo:    "https://github.com/testorg/testrepo",
+		EnvPath:       filepath.Join(dir, ".env"),
+		CypherDir:     filepath.Join(dir, ".cypher"),
+		APIBase:       fakeAPI.URL,
+		Client:        fakeAPI.Client(),
+		Stdout:        &stdout,
+		OnServerReady: onReady,
+		PEMStorage:    "file", // explicit: avoid stdin prompt in tests
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -410,7 +515,7 @@ func TestRun_EndToEnd(t *testing.T) {
 		t.Errorf(".env missing CYPHER_GH_INSTALLATION_ID=777:\n%s", env)
 	}
 
-	// Verify PEM was written.
+	// Verify PEM was written to disk in file mode.
 	pemPath := filepath.Join(dir, ".cypher", "app-key.pem")
 	if _, err := os.Stat(pemPath); err != nil {
 		t.Errorf("PEM file not found: %v", err)
@@ -423,6 +528,87 @@ func TestRun_EndToEnd(t *testing.T) {
 	}
 	if !strings.Contains(out, "Installed") {
 		t.Errorf("expected 'Installed' in output:\n%s", out)
+	}
+}
+
+func TestRun_EndToEnd_1Password(t *testing.T) {
+	privKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate RSA key: %v", err)
+	}
+	pemBytes := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(privKey),
+	})
+
+	fakeAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/app-manifests/"):
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
+				"id":   float64(999),
+				"slug": "cypher-testorg-testrepo",
+				"pem":  string(pemBytes),
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/app/installations":
+			json.NewEncoder(w).Encode([]map[string]interface{}{ //nolint:errcheck
+				{"id": float64(777), "account": map[string]string{"login": "testorg"}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer fakeAPI.Close()
+
+	// Fake `op` binary that accepts item create and exits 0.
+	fakeOp := writeFakeOpCreate(t, "exit 0")
+
+	dir := t.TempDir()
+	var stdout strings.Builder
+
+	cfg := Config{
+		TargetRepo: "https://github.com/testorg/testrepo",
+		EnvPath:    filepath.Join(dir, ".env"),
+		CypherDir:  filepath.Join(dir, ".cypher"),
+		APIBase:    fakeAPI.URL,
+		Client:     fakeAPI.Client(),
+		Stdout:     &stdout,
+		OnServerReady: func(port int) {
+			time.Sleep(20 * time.Millisecond)
+			resp, err := http.Get(fmt.Sprintf("http://localhost:%d/callback?code=testcode&state=ok", port))
+			if err == nil {
+				io.Copy(io.Discard, resp.Body) //nolint:errcheck
+				resp.Body.Close()
+			}
+		},
+		PEMStorage: "1password",
+		OPVault:    "TestVault",
+		OpPath:     fakeOp,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := Run(ctx, cfg); err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	// No PEM file on disk.
+	if _, err := os.Stat(filepath.Join(dir, ".cypher", "app-key.pem")); !os.IsNotExist(err) {
+		t.Error("expected no PEM file on disk in 1password mode")
+	}
+
+	// .env should have op:// URI, not a file path.
+	envData, err := os.ReadFile(cfg.EnvPath)
+	if err != nil {
+		t.Fatalf("read .env: %v", err)
+	}
+	env := string(envData)
+	if !strings.Contains(env, "CYPHER_GH_APP_PRIVATE_KEY=op://") {
+		t.Errorf(".env missing op:// key, got:\n%s", env)
+	}
+	if strings.Contains(env, "CYPHER_GH_APP_PRIVATE_KEY_FILE=") {
+		t.Errorf("1password mode must not write CYPHER_GH_APP_PRIVATE_KEY_FILE:\n%s", env)
 	}
 }
 

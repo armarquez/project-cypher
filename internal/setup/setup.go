@@ -2,6 +2,7 @@ package setup
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/rand"
@@ -40,9 +41,21 @@ type Config struct {
 	Client *http.Client
 	// Stdout receives progress output (defaults to os.Stdout).
 	Stdout io.Writer
+	// Stdin is used for interactive prompts (defaults to os.Stdin).
+	Stdin io.Reader
 	// OnServerReady is called once the local callback server is listening.
 	// The port is passed so callers (e.g. tests) can trigger the callback directly.
 	OnServerReady func(port int)
+	// PEMStorage controls where the GitHub App private key is stored.
+	// "file"        — write to <CypherDir>/app-key.pem (gitignored, plaintext on disk)
+	// "1password"   — store in 1Password via `op item create`; write op:// URI to .env
+	// ""            — prompt interactively (unless OnServerReady is set, then defaults to "file")
+	PEMStorage string
+	// OPVault is the 1Password vault name used when PEMStorage="1password".
+	// Defaults to "Private".
+	OPVault string
+	// OpPath overrides the path to the `op` CLI binary. Defaults to "op" from PATH.
+	OpPath string
 }
 
 func (c *Config) apiBase() string {
@@ -64,6 +77,27 @@ func (c *Config) stdout() io.Writer {
 		return c.Stdout
 	}
 	return os.Stdout
+}
+
+func (c *Config) stdin() io.Reader {
+	if c.Stdin != nil {
+		return c.Stdin
+	}
+	return os.Stdin
+}
+
+func (c *Config) opVault() string {
+	if c.OPVault != "" {
+		return c.OPVault
+	}
+	return "Private"
+}
+
+func (c *Config) opBin() string {
+	if c.OpPath != "" {
+		return c.OpPath
+	}
+	return "op"
 }
 
 // AppCredentials holds everything returned by the GitHub App manifest exchange.
@@ -242,22 +276,80 @@ func tryGetInstallation(ctx context.Context, client *http.Client, apiBase, jwtTo
 	return 0, nil
 }
 
-// WriteCredentials writes the App credentials to .env and the PEM to cypherDir/app-key.pem.
-func WriteCredentials(envPath, cypherDir string, creds *AppCredentials, installID int64) error {
-	if err := os.MkdirAll(cypherDir, 0o700); err != nil {
-		return fmt.Errorf("create cypher dir: %w", err)
+// StorePEMIn1Password stores pemContent as a concealed field in a 1Password item
+// and returns the op:// URI to read it back. Uses `op item create --template -`
+// so the multiline PEM is passed via stdin JSON — no shell-escaping issues.
+// --upsert ensures re-running setup updates the item rather than creating a duplicate.
+func StorePEMIn1Password(ctx context.Context, opPath, pemContent, slug, vault string) (string, error) {
+	title := "cypher-" + slug + "-key"
+
+	type opField struct {
+		Label string `json:"label"`
+		Type  string `json:"type"`
+		Value string `json:"value"`
+	}
+	type opTemplate struct {
+		Title    string            `json:"title"`
+		Vault    map[string]string `json:"vault"`
+		Category string            `json:"category"`
+		Fields   []opField         `json:"fields"`
 	}
 
-	pemPath := filepath.Join(cypherDir, "app-key.pem")
-	if err := os.WriteFile(pemPath, []byte(creds.PEM), 0o600); err != nil {
-		return fmt.Errorf("write PEM: %w", err)
+	tmpl := opTemplate{
+		Title:    title,
+		Vault:    map[string]string{"name": vault},
+		Category: "API_CREDENTIAL",
+		Fields: []opField{
+			{Label: "private key", Type: "CONCEALED", Value: pemContent},
+		},
+	}
+	templateJSON, err := json.Marshal(tmpl)
+	if err != nil {
+		return "", fmt.Errorf("marshal template: %w", err)
 	}
 
-	updates := map[string]string{
-		"CYPHER_GH_APP_ID":               fmt.Sprintf("%d", creds.AppID),
-		"CYPHER_GH_INSTALLATION_ID":      fmt.Sprintf("%d", installID),
-		"CYPHER_GH_APP_PRIVATE_KEY_FILE": pemPath,
+	cmd := exec.CommandContext(ctx, opPath, "item", "create",
+		"--template", "-",
+		"--vault", vault,
+		"--upsert",
+	)
+	cmd.Stdin = bytes.NewReader(templateJSON)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("op item create: %s", strings.TrimSpace(string(out)))
 	}
+
+	return fmt.Sprintf("op://%s/%s/private key", vault, title), nil
+}
+
+// WriteCredentials persists App credentials to .env and optionally to disk.
+//
+// pemRef controls where the private key is stored:
+//   - if it starts with "op://" the PEM is not written to disk; CYPHER_GH_APP_PRIVATE_KEY is set to pemRef
+//   - otherwise pemRef is treated as a file path; the PEM is written there; CYPHER_GH_APP_PRIVATE_KEY_FILE is set
+func WriteCredentials(envPath, cypherDir string, creds *AppCredentials, installID int64, pemRef string) error {
+	var updates map[string]string
+
+	if strings.HasPrefix(pemRef, "op://") {
+		updates = map[string]string{
+			"CYPHER_GH_APP_ID":          fmt.Sprintf("%d", creds.AppID),
+			"CYPHER_GH_INSTALLATION_ID": fmt.Sprintf("%d", installID),
+			"CYPHER_GH_APP_PRIVATE_KEY": pemRef,
+		}
+	} else {
+		if err := os.MkdirAll(cypherDir, 0o700); err != nil {
+			return fmt.Errorf("create cypher dir: %w", err)
+		}
+		if err := os.WriteFile(pemRef, []byte(creds.PEM), 0o600); err != nil {
+			return fmt.Errorf("write PEM: %w", err)
+		}
+		updates = map[string]string{
+			"CYPHER_GH_APP_ID":               fmt.Sprintf("%d", creds.AppID),
+			"CYPHER_GH_INSTALLATION_ID":      fmt.Sprintf("%d", installID),
+			"CYPHER_GH_APP_PRIVATE_KEY_FILE": pemRef,
+		}
+	}
+
 	if err := updateEnvFile(envPath, updates); err != nil {
 		return fmt.Errorf("update .env: %w", err)
 	}
@@ -293,7 +385,22 @@ func updateEnvFile(path string, updates map[string]string) error {
 	return os.WriteFile(path, []byte(content), 0o600)
 }
 
-// Run executes the full setup flow: manifest → callback → exchange → install → write.
+// promptPEMStorage prints storage options to w and reads the user's choice from r.
+// Returns "1password" or "file". Defaults to "1password" on empty input.
+func promptPEMStorage(r io.Reader, w io.Writer) string {
+	fmt.Fprintln(w, "  How should the GitHub App private key be stored?")
+	fmt.Fprintln(w, "  [1] 1Password (recommended) — zero plaintext on disk")
+	fmt.Fprintln(w, "  [2] File — .cypher/app-key.pem (gitignored, but plaintext on disk)")
+	fmt.Fprint(w, "  Enter choice [1]: ")
+
+	scanner := bufio.NewScanner(r)
+	if scanner.Scan() && strings.TrimSpace(scanner.Text()) == "2" {
+		return "file"
+	}
+	return "1password"
+}
+
+// Run executes the full setup flow: manifest → callback → exchange → install → store credentials.
 func Run(ctx context.Context, cfg Config) error {
 	owner, repo, err := config.ParseRepo(cfg.TargetRepo)
 	if err != nil {
@@ -401,7 +508,6 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	fmt.Fprintf(out, "  ✓ Installed (installation_id: %d)\n\n", installID)
 
-	// Step 7: Write credentials.
 	envPath := cfg.EnvPath
 	if envPath == "" {
 		envPath = ".env"
@@ -410,14 +516,63 @@ func Run(ctx context.Context, cfg Config) error {
 	if cypherDir == "" {
 		cypherDir = ".cypher"
 	}
-	if err := WriteCredentials(envPath, cypherDir, creds, installID); err != nil {
+
+	// Step 7: Determine PEM storage and store the key.
+	// Resolve the storage mode: explicit flag > test mode default > interactive prompt.
+	pemStorage := cfg.PEMStorage
+	if pemStorage == "" && cfg.OnServerReady != nil {
+		pemStorage = "file" // test mode: avoid blocking on stdin
+	}
+
+	var pemRef string
+	storeInOP := func() error {
+		vault := cfg.opVault()
+		fmt.Fprintf(out, "  Storing in 1Password vault %q...\n", vault)
+		var opErr error
+		pemRef, opErr = StorePEMIn1Password(ctx, cfg.opBin(), creds.PEM, creds.Slug, vault)
+		if opErr != nil {
+			return fmt.Errorf("store PEM in 1Password: %w", opErr)
+		}
+		fmt.Fprintf(out, "  ✓ Stored: %s\n\n", pemRef)
+		return nil
+	}
+
+	switch pemStorage {
+	case "1password":
+		fmt.Fprintf(out, "Step 3: Store private key\n")
+		if err = storeInOP(); err != nil {
+			return err
+		}
+	case "file":
+		pemRef = filepath.Join(cypherDir, "app-key.pem")
+	default:
+		// Interactive prompt.
+		fmt.Fprintf(out, "Step 3: Store private key\n")
+		if promptPEMStorage(cfg.stdin(), out) == "1password" {
+			if err = storeInOP(); err != nil {
+				return err
+			}
+		} else {
+			pemRef = filepath.Join(cypherDir, "app-key.pem")
+		}
+	}
+
+	if err = WriteCredentials(envPath, cypherDir, creds, installID, pemRef); err != nil {
 		return fmt.Errorf("write credentials: %w", err)
 	}
-	pemPath := filepath.Join(cypherDir, "app-key.pem")
-	fmt.Fprintf(out, "Step 3: Write credentials\n")
+
+	stepLabel := "Step 3"
+	if pemStorage == "1password" || strings.HasPrefix(pemRef, "op://") {
+		stepLabel = "Step 4"
+	}
+	fmt.Fprintf(out, "%s: Write credentials\n", stepLabel)
 	fmt.Fprintf(out, "  ✓ %s updated:\n", envPath)
 	fmt.Fprintf(out, "      CYPHER_GH_APP_ID=%d\n", creds.AppID)
-	fmt.Fprintf(out, "      CYPHER_GH_APP_PRIVATE_KEY_FILE=%s\n", pemPath)
+	if strings.HasPrefix(pemRef, "op://") {
+		fmt.Fprintf(out, "      CYPHER_GH_APP_PRIVATE_KEY=%s\n", pemRef)
+	} else {
+		fmt.Fprintf(out, "      CYPHER_GH_APP_PRIVATE_KEY_FILE=%s\n", pemRef)
+	}
 	fmt.Fprintf(out, "      CYPHER_GH_INSTALLATION_ID=%d\n\n", installID)
 	fmt.Fprintf(out, "Run `cypher doctor` to verify your environment.\n")
 

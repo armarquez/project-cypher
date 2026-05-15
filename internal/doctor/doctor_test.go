@@ -368,3 +368,27 @@ func TestCheckSecrets_UnsetVarSkipped(t *testing.T) {
 		t.Errorf("expected no results for unset var, got %d", len(results))
 	}
 }
+
+// --- CheckPEMFile ---
+
+func TestCheckPEMFile_Unset(t *testing.T) {
+	t.Setenv("CYPHER_GH_APP_PRIVATE_KEY_FILE", "")
+	results := CheckPEMFile()
+	if len(results) != 0 {
+		t.Errorf("expected no results when var is unset, got %d", len(results))
+	}
+}
+
+func TestCheckPEMFile_Set(t *testing.T) {
+	t.Setenv("CYPHER_GH_APP_PRIVATE_KEY_FILE", ".cypher/app-key.pem")
+	results := CheckPEMFile()
+	if len(results) == 0 {
+		t.Fatal("expected a result when plaintext file is configured")
+	}
+	if pass(results, "GitHub App key storage") {
+		t.Error("expected fail for plaintext PEM file")
+	}
+	if results[0].Fix == "" {
+		t.Error("expected migration hint in Fix")
+	}
+}
