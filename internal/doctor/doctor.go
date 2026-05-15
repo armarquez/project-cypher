@@ -44,7 +44,7 @@ type Config struct {
 // knownSecretVars is the set of env vars the doctor scans for op:// references.
 var knownSecretVars = []string{
 	"CYPHER_GH_TOKEN",
-	"CYPHER_GH_APP_PRIVATE_KEY_FILE",
+	"CYPHER_GH_APP_PRIVATE_KEY",
 	"ANTHROPIC_API_KEY",
 	"GEMINI_API_KEY",
 }
@@ -74,6 +74,8 @@ func Run(ctx context.Context, cfg Config) []Result {
 	}
 	op := &secrets.OnePassword{OpPath: cfg.OpPath}
 	results = append(results, CheckSecrets(ctx, secretVars, op)...)
+
+	results = append(results, CheckPEMFile()...)
 
 	return results
 }
@@ -319,6 +321,21 @@ func CheckSecrets(ctx context.Context, envVars []string, op *secrets.OnePassword
 		}
 	}
 	return results
+}
+
+// CheckPEMFile warns when CYPHER_GH_APP_PRIVATE_KEY_FILE is set, indicating
+// the GitHub App private key is stored as plaintext on disk. Returns no results
+// when the variable is unset (key not yet configured or stored via op://).
+func CheckPEMFile() []Result {
+	v := strings.TrimSpace(os.Getenv("CYPHER_GH_APP_PRIVATE_KEY_FILE"))
+	if v == "" {
+		return nil
+	}
+	return []Result{{
+		Name: "GitHub App key storage",
+		Pass: false,
+		Fix:  "CYPHER_GH_APP_PRIVATE_KEY_FILE stores the key as a plaintext file — migrate to 1Password by re-running `cypher setup` and choosing 1Password when prompted",
+	}}
 }
 
 // errorPair returns two failed Results, the second referencing the first as a dependency.
