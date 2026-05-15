@@ -2,7 +2,6 @@ package setup
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/x509"
@@ -329,14 +328,26 @@ func StorePEMIn1Password(ctx context.Context, opPath, pemContent, slug, vault st
 		return "", fmt.Errorf("marshal template: %w", err)
 	}
 
+	// Write template to a temp file: older op versions don't support --template - (stdin).
+	tmpFile, err := os.CreateTemp("", "cypher-op-*.json")
+	if err != nil {
+		return "", fmt.Errorf("create temp file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath)
+	if _, err := tmpFile.Write(templateJSON); err != nil {
+		tmpFile.Close()
+		return "", fmt.Errorf("write template: %w", err)
+	}
+	tmpFile.Close()
+
 	// Delete any pre-existing item so create doesn't accumulate duplicates.
 	deleteExistingOPItem(ctx, opPath, title, vault)
 
 	cmd := exec.CommandContext(ctx, opPath, "item", "create",
-		"--template", "-",
+		"--template", tmpPath,
 		"--vault", vault,
 	)
-	cmd.Stdin = bytes.NewReader(templateJSON)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
