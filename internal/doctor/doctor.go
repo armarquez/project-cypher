@@ -7,10 +7,12 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/armarquez/project-cypher/internal/config"
+	"github.com/armarquez/project-cypher/internal/secrets"
 	"github.com/armarquez/project-cypher/internal/validate"
 )
 
@@ -34,6 +36,17 @@ type Config struct {
 	DockerSocket string
 	OpenHandsURL string
 	WorkerImage  string
+	// OpPath is the path to the `op` CLI binary used for CheckSecrets.
+	// Defaults to "op" from PATH when empty.
+	OpPath string
+}
+
+// knownSecretVars is the set of env vars the doctor scans for op:// references.
+var knownSecretVars = []string{
+	"CYPHER_GH_TOKEN",
+	"CYPHER_GH_APP_PRIVATE_KEY_FILE",
+	"ANTHROPIC_API_KEY",
+	"GEMINI_API_KEY",
 }
 
 // Run executes all environment checks and returns their results in order.
@@ -53,6 +66,14 @@ func Run(ctx context.Context, cfg Config) []Result {
 
 	ohClient := &http.Client{Timeout: 10 * time.Second}
 	results = append(results, CheckOpenHands(ctx, ohClient, cfg.OpenHandsURL))
+
+	// Build the full set of secret vars to scan, including the per-repo token var.
+	secretVars := append([]string(nil), knownSecretVars...)
+	if varName != "CYPHER_GH_TOKEN" {
+		secretVars = append(secretVars, varName)
+	}
+	op := &secrets.OnePassword{OpPath: cfg.OpPath}
+	results = append(results, CheckSecrets(ctx, secretVars, op)...)
 
 	return results
 }
@@ -255,6 +276,49 @@ func CheckOpenHands(ctx context.Context, client *http.Client, baseURL string) Re
 		}
 	}
 	return Result{Name: "OpenHands endpoint responding", Pass: true, Detail: baseURL}
+}
+
+// CheckSecrets scans envVars for op:// references and verifies the 1Password CLI
+// is installed and can resolve each secret. Returns no results when no op:// values
+// are found (secrets are all plaintext — nothing to check).
+func CheckSecrets(ctx context.Context, envVars []string, op *secrets.OnePassword) []Result {
+	var opRefs []struct{ key, uri string }
+	for _, key := range envVars {
+		if v := strings.TrimSpace(os.Getenv(key)); strings.HasPrefix(v, "op://") {
+			opRefs = append(opRefs, struct{ key, uri string }{key, v})
+		}
+	}
+	if len(opRefs) == 0 {
+		return nil
+	}
+
+	if !op.Available() {
+		return []Result{{
+			Name: "1Password CLI (op) installed",
+			Pass: false,
+			Fix:  "install the 1Password CLI: https://developer.1password.com/docs/cli/get-started/",
+		}}
+	}
+
+	var results []Result
+	results = append(results, Result{Name: "1Password CLI (op) installed", Pass: true})
+
+	for _, ref := range opRefs {
+		tctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		_, err := op.Resolve(tctx, ref.uri)
+		cancel()
+		name := ref.key + " accessible via op"
+		if err != nil {
+			results = append(results, Result{
+				Name: name,
+				Pass: false,
+				Fix:  fmt.Sprintf("run `op signin` and verify the secret exists — %s", ref.uri),
+			})
+		} else {
+			results = append(results, Result{Name: name, Pass: true})
+		}
+	}
+	return results
 }
 
 // errorPair returns two failed Results, the second referencing the first as a dependency.

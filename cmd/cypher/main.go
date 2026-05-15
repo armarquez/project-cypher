@@ -15,6 +15,7 @@ import (
 	"github.com/armarquez/project-cypher/internal/gateway"
 	"github.com/armarquez/project-cypher/internal/github"
 	"github.com/armarquez/project-cypher/internal/orchestrator"
+	"github.com/armarquez/project-cypher/internal/secrets"
 	"github.com/armarquez/project-cypher/internal/session"
 	"github.com/armarquez/project-cypher/internal/setup"
 	"github.com/armarquez/project-cypher/internal/validate"
@@ -193,13 +194,18 @@ func runOrchestrator() {
 		os.Exit(1)
 	}
 
-	token, tokenVar, _ := config.ResolveGHToken(owner, repo)
-	if token == "" {
+	rawToken, tokenVar, _ := config.ResolveGHToken(owner, repo)
+	if rawToken == "" {
 		log.Error("GitHub token not set",
 			"tried", tokenVar,
 			"fallback", "CYPHER_GH_TOKEN",
 			"hint", "set "+tokenVar+" in your .env file",
 		)
+		os.Exit(1)
+	}
+	token, err := secrets.Resolve(context.Background(), rawToken)
+	if err != nil {
+		log.Error("resolve GitHub token", "var", tokenVar, "err", err)
 		os.Exit(1)
 	}
 
