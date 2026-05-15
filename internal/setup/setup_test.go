@@ -249,8 +249,10 @@ func writeFakeOpCreate(t *testing.T, script string) string {
 }
 
 func TestStorePEMIn1Password_Success(t *testing.T) {
-	// Fake op: whoami succeeds, item create succeeds.
-	bin := writeFakeOpCreate(t, "exit 0")
+	// item get: returns not-found (no pre-existing item); item create: succeeds.
+	bin := writeFakeOpCreate(t, `
+if [ "$1" = "item" ] && [ "$2" = "get" ]; then exit 1; fi
+exit 0`)
 
 	uri, err := StorePEMIn1Password(context.Background(), bin,
 		"-----BEGIN RSA PRIVATE KEY-----\nfake\n-----END RSA PRIVATE KEY-----\n",
@@ -264,13 +266,36 @@ func TestStorePEMIn1Password_Success(t *testing.T) {
 }
 
 func TestStorePEMIn1Password_ItemCreateFails(t *testing.T) {
-	bin := writeFakeOpCreate(t, "echo 'vault not found' >&2; exit 1")
+	// item get: not found (no pre-existing item); item create: fails.
+	bin := writeFakeOpCreate(t, `
+if [ "$1" = "item" ] && [ "$2" = "get" ]; then exit 1; fi
+echo 'vault not found' >&2; exit 1`)
 
 	_, err := StorePEMIn1Password(context.Background(), bin,
 		"-----BEGIN RSA PRIVATE KEY-----\nfake\n-----END RSA PRIVATE KEY-----\n",
 		"testorg-testrepo", "Private")
 	if err == nil {
 		t.Fatal("expected error when item create fails")
+	}
+}
+
+func TestStorePEMIn1Password_DeletesExistingBeforeCreate(t *testing.T) {
+	// item get: returns a JSON item with an ID → delete is called; item delete: succeeds; item create: succeeds.
+	bin := writeFakeOpCreate(t, `
+if [ "$1" = "item" ] && [ "$2" = "get" ]; then
+  printf '{"id":"abc123"}'
+  exit 0
+fi
+exit 0`)
+
+	uri, err := StorePEMIn1Password(context.Background(), bin,
+		"-----BEGIN RSA PRIVATE KEY-----\nfake\n-----END RSA PRIVATE KEY-----\n",
+		"testorg-testrepo", "Private")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.HasPrefix(uri, "op://Private/cypher-testorg-testrepo-key/") {
+		t.Errorf("unexpected URI: %s", uri)
 	}
 }
 

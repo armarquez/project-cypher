@@ -299,7 +299,8 @@ func tryGetInstallation(ctx context.Context, client *http.Client, apiBase, jwtTo
 // StorePEMIn1Password stores pemContent as a concealed field in a 1Password item
 // and returns the op:// URI to read it back. Uses `op item create --template -`
 // so the multiline PEM is passed via stdin JSON — no shell-escaping issues.
-// --upsert ensures re-running setup updates the item rather than creating a duplicate.
+// Any existing item with the same title is deleted first to avoid duplicates
+// (replaces --upsert which is not available in older op CLI versions).
 func StorePEMIn1Password(ctx context.Context, opPath, pemContent, slug, vault string) (string, error) {
 	title := "cypher-" + slug + "-key"
 
@@ -328,10 +329,12 @@ func StorePEMIn1Password(ctx context.Context, opPath, pemContent, slug, vault st
 		return "", fmt.Errorf("marshal template: %w", err)
 	}
 
+	// Delete any pre-existing item so create doesn't accumulate duplicates.
+	deleteExistingOPItem(ctx, opPath, title, vault)
+
 	cmd := exec.CommandContext(ctx, opPath, "item", "create",
 		"--template", "-",
 		"--vault", vault,
-		"--upsert",
 	)
 	cmd.Stdin = bytes.NewReader(templateJSON)
 	out, err := cmd.CombinedOutput()
@@ -344,6 +347,23 @@ func StorePEMIn1Password(ctx context.Context, opPath, pemContent, slug, vault st
 	}
 
 	return fmt.Sprintf("op://%s/%s/private key", vault, title), nil
+}
+
+// deleteExistingOPItem looks up an item by title and deletes it if found.
+// Errors are silently ignored — the item simply may not exist yet.
+func deleteExistingOPItem(ctx context.Context, opPath, title, vault string) {
+	out, err := exec.CommandContext(ctx, opPath, "item", "get", title,
+		"--vault", vault, "--format", "json").Output()
+	if err != nil {
+		return
+	}
+	var item struct {
+		ID string `json:"id"`
+	}
+	if json.Unmarshal(out, &item) != nil || item.ID == "" {
+		return
+	}
+	exec.CommandContext(ctx, opPath, "item", "delete", item.ID, "--vault", vault).Run() //nolint:errcheck
 }
 
 // WriteCredentials persists App credentials to .env and optionally to disk.
