@@ -255,6 +255,7 @@ func writeFakeOpCreate(t *testing.T, script string) string {
 }
 
 func TestStorePEMIn1Password_Success(t *testing.T) {
+	// Fake op: whoami succeeds, item create succeeds.
 	bin := writeFakeOpCreate(t, "exit 0")
 
 	uri, err := StorePEMIn1Password(context.Background(), bin,
@@ -268,14 +269,37 @@ func TestStorePEMIn1Password_Success(t *testing.T) {
 	}
 }
 
-func TestStorePEMIn1Password_Failure(t *testing.T) {
+func TestStorePEMIn1Password_NotAuthenticated(t *testing.T) {
+	// Fake op: whoami fails (not signed in).
 	bin := writeFakeOpCreate(t, "echo 'not signed in' >&2; exit 1")
 
 	_, err := StorePEMIn1Password(context.Background(), bin,
 		"-----BEGIN RSA PRIVATE KEY-----\nfake\n-----END RSA PRIVATE KEY-----\n",
 		"testorg-testrepo", "Private")
 	if err == nil {
-		t.Fatal("expected error when op exits non-zero")
+		t.Fatal("expected error when op is not authenticated")
+	}
+	if !strings.Contains(err.Error(), "not authenticated") {
+		t.Errorf("expected 'not authenticated' in error, got: %v", err)
+	}
+}
+
+func TestStorePEMIn1Password_ItemCreateFails(t *testing.T) {
+	// Fake op: whoami succeeds, item create fails.
+	bin := writeFakeOpCreate(t, `
+if [ "$1" = "whoami" ]; then exit 0; fi
+echo 'vault not found' >&2
+exit 1
+`)
+
+	_, err := StorePEMIn1Password(context.Background(), bin,
+		"-----BEGIN RSA PRIVATE KEY-----\nfake\n-----END RSA PRIVATE KEY-----\n",
+		"testorg-testrepo", "Private")
+	if err == nil {
+		t.Fatal("expected error when item create fails")
+	}
+	if strings.Contains(err.Error(), "not authenticated") {
+		t.Errorf("wrong error branch: %v", err)
 	}
 }
 
@@ -554,7 +578,7 @@ func TestRun_EndToEnd_1Password(t *testing.T) {
 	}))
 	defer fakeAPI.Close()
 
-	// Fake `op` binary that accepts item create and exits 0.
+	// Fake `op` binary that handles whoami (auth check) and item create.
 	fakeOp := writeFakeOpCreate(t, "exit 0")
 
 	dir := t.TempDir()

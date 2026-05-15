@@ -282,6 +282,15 @@ func tryGetInstallation(ctx context.Context, client *http.Client, apiBase, jwtTo
 // so the multiline PEM is passed via stdin JSON — no shell-escaping issues.
 // --upsert ensures re-running setup updates the item rather than creating a duplicate.
 func StorePEMIn1Password(ctx context.Context, opPath, pemContent, slug, vault string) (string, error) {
+	// Pre-flight: verify op is authenticated before attempting item creation.
+	if out, err := exec.CommandContext(ctx, opPath, "whoami").CombinedOutput(); err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			msg = err.Error()
+		}
+		return "", fmt.Errorf("1Password CLI not authenticated: %s\n  → run `op signin` and try again", msg)
+	}
+
 	title := "cypher-" + slug + "-key"
 
 	type opField struct {
@@ -317,7 +326,11 @@ func StorePEMIn1Password(ctx context.Context, opPath, pemContent, slug, vault st
 	cmd.Stdin = bytes.NewReader(templateJSON)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("op item create: %s", strings.TrimSpace(string(out)))
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			msg = err.Error()
+		}
+		return "", fmt.Errorf("op item create: %s", msg)
 	}
 
 	return fmt.Sprintf("op://%s/%s/private key", vault, title), nil
