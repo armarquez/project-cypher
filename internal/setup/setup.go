@@ -426,7 +426,7 @@ func recoverPEM(ctx context.Context, cfg Config, slug string, out io.Writer) (st
 	fmt.Fprintf(out, "  Enter path to the downloaded .pem file: ")
 	scanner := bufio.NewScanner(cfg.stdin())
 	if scanner.Scan() {
-		path := strings.TrimSpace(scanner.Text())
+		path := normalizePEMPath(strings.TrimSpace(scanner.Text()))
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return "", fmt.Errorf("read PEM file %q: %w", path, err)
@@ -434,6 +434,22 @@ func recoverPEM(ctx context.Context, cfg Config, slug string, out io.Writer) (st
 		return string(data), nil
 	}
 	return "", fmt.Errorf("no PEM file path provided")
+}
+
+// normalizePEMPath cleans up a path entered interactively:
+//   - strips surrounding double- or single-quotes (common copy-paste artifact)
+//   - converts Windows-style paths (C:\Users\...) to WSL mount paths (/mnt/c/Users/...)
+func normalizePEMPath(p string) string {
+	if len(p) >= 2 && ((p[0] == '"' && p[len(p)-1] == '"') || (p[0] == '\'' && p[len(p)-1] == '\'')) {
+		p = p[1 : len(p)-1]
+	}
+	// Windows absolute path: letter colon backslash
+	if len(p) >= 3 && p[1] == ':' && (p[2] == '\\' || p[2] == '/') {
+		drive := strings.ToLower(string(p[0]))
+		rest := strings.ReplaceAll(p[3:], "\\", "/")
+		return "/mnt/" + drive + "/" + rest
+	}
+	return p
 }
 
 // updateEnvFile reads envPath (creating it if absent), updates or appends the
