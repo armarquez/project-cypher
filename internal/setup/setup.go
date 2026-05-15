@@ -99,6 +99,13 @@ func (c *Config) opBin() string {
 	if c.OpPath != "" {
 		return c.OpPath
 	}
+	// Prefer op.exe on Linux/WSL2: the 1Password Windows CLI integrates with
+	// the desktop app without requiring a separate `op signin`.
+	if runtime.GOOS == "linux" {
+		if p, err := exec.LookPath("op.exe"); err == nil {
+			return p
+		}
+	}
 	return "op"
 }
 
