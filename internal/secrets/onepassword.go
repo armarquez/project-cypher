@@ -40,6 +40,21 @@ func (o *OnePassword) Available() bool {
 	return err == nil
 }
 
+// Preflight checks that the op CLI is installed and the user is signed in.
+// Call this before any operation that stores or reads 1Password secrets so
+// auth errors surface immediately rather than after expensive earlier steps.
+func (o *OnePassword) Preflight(ctx context.Context) error {
+	out, err := exec.CommandContext(ctx, o.bin(), "whoami").CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			msg = err.Error()
+		}
+		return fmt.Errorf("1Password CLI not ready: %s\n  → run `op signin` and try again", msg)
+	}
+	return nil
+}
+
 func (o *OnePassword) bin() string {
 	if o.OpPath != "" {
 		return o.OpPath

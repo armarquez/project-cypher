@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/armarquez/project-cypher/internal/config"
+	"github.com/armarquez/project-cypher/internal/secrets"
 	"github.com/golang-jwt/jwt/v4"
 )
 
@@ -293,15 +294,6 @@ func tryGetInstallation(ctx context.Context, client *http.Client, apiBase, jwtTo
 // so the multiline PEM is passed via stdin JSON — no shell-escaping issues.
 // --upsert ensures re-running setup updates the item rather than creating a duplicate.
 func StorePEMIn1Password(ctx context.Context, opPath, pemContent, slug, vault string) (string, error) {
-	// Pre-flight: verify op is authenticated before attempting item creation.
-	if out, err := exec.CommandContext(ctx, opPath, "whoami").CombinedOutput(); err != nil {
-		msg := strings.TrimSpace(string(out))
-		if msg == "" {
-			msg = err.Error()
-		}
-		return "", fmt.Errorf("1Password CLI not authenticated: %s\n  → run `op signin` and try again", msg)
-	}
-
 	title := "cypher-" + slug + "-key"
 
 	type opField struct {
@@ -490,6 +482,16 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 
 	out := cfg.stdout()
+
+	// Pre-flight: verify 1Password is ready before starting the GitHub App flow,
+	// so auth failures surface immediately rather than after the browser steps.
+	if cfg.PEMStorage == "1password" {
+		op := &secrets.OnePassword{OpPath: cfg.opBin()}
+		if err := op.Preflight(ctx); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "✓ 1Password authenticated\n\n")
+	}
 	envPath := cfg.envPath()
 	cypherDir := cfg.cypherDir()
 
