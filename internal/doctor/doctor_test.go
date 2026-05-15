@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/armarquez/project-cypher/internal/secrets"
 )
 
 // --- helpers ---
@@ -292,5 +294,77 @@ func TestCheckOpenHands_ServerError(t *testing.T) {
 	r := CheckOpenHands(context.Background(), s.Client(), s.URL)
 	if r.Pass {
 		t.Error("expected fail on 5xx response")
+	}
+}
+
+// --- CheckSecrets ---
+
+func writeFakeOp(t *testing.T, script string) string {
+	t.Helper()
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "op")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"+script), 0o755); err != nil {
+		t.Fatalf("write fake op: %v", err)
+	}
+	return bin
+}
+
+func TestCheckSecrets_NoOpRefs(t *testing.T) {
+	t.Setenv("CYPHER_GH_TOKEN", "ghp_plaintoken")
+	op := &secrets.OnePassword{OpPath: "/nonexistent/op"}
+	results := CheckSecrets(context.Background(), []string{"CYPHER_GH_TOKEN"}, op)
+	if len(results) != 0 {
+		t.Errorf("expected no results when no op:// refs, got %d", len(results))
+	}
+}
+
+func TestCheckSecrets_OpCLIMissing(t *testing.T) {
+	t.Setenv("CYPHER_GH_TOKEN", "op://vault/item/field")
+	op := &secrets.OnePassword{OpPath: "/nonexistent/op"}
+	results := CheckSecrets(context.Background(), []string{"CYPHER_GH_TOKEN"}, op)
+	if len(results) == 0 {
+		t.Fatal("expected at least one result")
+	}
+	if pass(results, "1Password CLI (op) installed") {
+		t.Error("expected fail when op CLI is missing")
+	}
+	r := results[0]
+	if r.Fix == "" {
+		t.Error("expected fix hint")
+	}
+}
+
+func TestCheckSecrets_ResolveSuccess(t *testing.T) {
+	t.Setenv("CYPHER_GH_TOKEN", "op://vault/item/field")
+	bin := writeFakeOp(t, "printf '%s' mysecret")
+	op := &secrets.OnePassword{OpPath: bin}
+	results := CheckSecrets(context.Background(), []string{"CYPHER_GH_TOKEN"}, op)
+	if !pass(results, "1Password CLI (op) installed") {
+		t.Error("expected op CLI check to pass")
+	}
+	if !pass(results, "CYPHER_GH_TOKEN accessible via op") {
+		t.Errorf("expected secret accessible, results: %v", results)
+	}
+}
+
+func TestCheckSecrets_ResolveFails(t *testing.T) {
+	t.Setenv("CYPHER_GH_TOKEN", "op://vault/item/field")
+	bin := writeFakeOp(t, "echo 'not signed in' >&2; exit 1")
+	op := &secrets.OnePassword{OpPath: bin}
+	results := CheckSecrets(context.Background(), []string{"CYPHER_GH_TOKEN"}, op)
+	if !pass(results, "1Password CLI (op) installed") {
+		t.Error("expected op CLI check to pass")
+	}
+	if pass(results, "CYPHER_GH_TOKEN accessible via op") {
+		t.Error("expected secret check to fail when op read exits non-zero")
+	}
+}
+
+func TestCheckSecrets_UnsetVarSkipped(t *testing.T) {
+	t.Setenv("CYPHER_GH_TOKEN", "")
+	op := &secrets.OnePassword{OpPath: "/nonexistent/op"}
+	results := CheckSecrets(context.Background(), []string{"CYPHER_GH_TOKEN"}, op)
+	if len(results) != 0 {
+		t.Errorf("expected no results for unset var, got %d", len(results))
 	}
 }
