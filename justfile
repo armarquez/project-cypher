@@ -37,8 +37,9 @@ coverage:
 # Provision a GitHub App and write credentials to .env (interactive — opens browser)
 # PEM_STORAGE: "1password" (default) or "file" — controls where the App private key is stored
 # OP_VAULT: 1Password vault name (default: "Private"), used when PEM_STORAGE=1password
-setup CONFIG="configs/project-cypher.yaml" PEM_STORAGE="1password" OP_VAULT="Private":
-    go run ./cmd/cypher setup --config {{CONFIG}} --pem-storage {{PEM_STORAGE}} --op-vault {{OP_VAULT}}
+# APP_NAME: override the default "cypher-{owner}-{repo}" name — use when the default is still reserved by GitHub
+setup CONFIG="configs/project-cypher.yaml" PEM_STORAGE="1password" OP_VAULT="Private" APP_NAME="":
+    go run ./cmd/cypher setup --config {{CONFIG}} --pem-storage {{PEM_STORAGE}} --op-vault {{OP_VAULT}} {{ if APP_NAME != "" { "--app-name " + APP_NAME } else { "" } }}
 
 # Check the runtime environment (token, config, Docker, OpenHands, 1Password CLI if op:// secrets configured)
 doctor:
