@@ -176,6 +176,49 @@ func TestOnePassword_Available_False(t *testing.T) {
 	}
 }
 
+// --- OnePassword.Preflight ---
+
+func TestOnePassword_Preflight_Success(t *testing.T) {
+	bin := writeFakeOp(t, "exit 0")
+	o := &OnePassword{OpPath: bin}
+	if err := o.Preflight(context.Background()); err != nil {
+		t.Errorf("expected nil error when op succeeds, got: %v", err)
+	}
+}
+
+func TestOnePassword_Preflight_NotSignedIn(t *testing.T) {
+	bin := writeFakeOp(t, "echo '[ERROR] account is not signed in' >&2; exit 1")
+	o := &OnePassword{OpPath: bin}
+	err := o.Preflight(context.Background())
+	if err == nil {
+		t.Fatal("expected error when op is not signed in")
+	}
+	if !containsAny(err.Error(), "not signed in", "not ready") {
+		t.Errorf("expected auth-related message in error, got: %v", err)
+	}
+}
+
+func TestOnePassword_Preflight_BinaryMissing(t *testing.T) {
+	o := &OnePassword{OpPath: "/nonexistent/op"}
+	err := o.Preflight(context.Background())
+	if err == nil {
+		t.Fatal("expected error when op binary is missing")
+	}
+}
+
+func containsAny(s string, subs ...string) bool {
+	for _, sub := range subs {
+		if len(s) >= len(sub) {
+			for i := 0; i <= len(s)-len(sub); i++ {
+				if s[i:i+len(sub)] == sub {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 // --- Package-level convenience functions ---
 
 func TestResolveEnv_Unset(t *testing.T) {
