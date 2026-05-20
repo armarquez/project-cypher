@@ -36,9 +36,9 @@ type Config struct {
 	DockerSocket string
 	OpenHandsURL string
 	WorkerImage  string
-	// OpPath is the path to the `op` CLI binary used for CheckSecrets.
-	// Defaults to "op" from PATH when empty.
-	OpPath string
+	// Vault is used to resolve op:// secret references in CheckSecrets.
+	// Defaults to a 1Password CLI-backed vault (auto-detects op/op.exe from PATH).
+	Vault secrets.Vault
 }
 
 // knownSecretVars is the set of env vars the doctor scans for op:// references.
@@ -72,8 +72,11 @@ func Run(ctx context.Context, cfg Config) []Result {
 	if varName != "CYPHER_GH_TOKEN" {
 		secretVars = append(secretVars, varName)
 	}
-	op := &secrets.OnePassword{OpPath: cfg.OpPath}
-	results = append(results, CheckSecrets(ctx, secretVars, op)...)
+	v := cfg.Vault
+	if v == nil {
+		v = &secrets.OnePassword{} // auto-detects op/op.exe from PATH
+	}
+	results = append(results, CheckSecrets(ctx, secretVars, v)...)
 
 	results = append(results, CheckPEMFile()...)
 
@@ -280,34 +283,34 @@ func CheckOpenHands(ctx context.Context, client *http.Client, baseURL string) Re
 	return Result{Name: "OpenHands endpoint responding", Pass: true, Detail: baseURL}
 }
 
-// CheckSecrets scans envVars for op:// references and verifies the 1Password CLI
-// is installed and can resolve each secret. Returns no results when no op:// values
-// are found (secrets are all plaintext — nothing to check).
-func CheckSecrets(ctx context.Context, envVars []string, op *secrets.OnePassword) []Result {
-	var opRefs []struct{ key, uri string }
+// CheckSecrets scans envVars for vault references (e.g. op://) and verifies
+// the vault backend is ready and can resolve each secret. Returns no results
+// when no vault references are found (all secrets are plaintext — nothing to check).
+func CheckSecrets(ctx context.Context, envVars []string, v secrets.Vault) []Result {
+	var refs []struct{ key, uri string }
 	for _, key := range envVars {
-		if v := strings.TrimSpace(os.Getenv(key)); strings.HasPrefix(v, "op://") {
-			opRefs = append(opRefs, struct{ key, uri string }{key, v})
+		if val := strings.TrimSpace(os.Getenv(key)); v.Handles(val) {
+			refs = append(refs, struct{ key, uri string }{key, val})
 		}
 	}
-	if len(opRefs) == 0 {
+	if len(refs) == 0 {
 		return nil
 	}
 
-	if !op.Available() {
+	if err := v.Preflight(ctx); err != nil {
 		return []Result{{
-			Name: "1Password CLI (op) installed",
+			Name: "1Password CLI ready",
 			Pass: false,
-			Fix:  "install the 1Password CLI: https://developer.1password.com/docs/cli/get-started/",
+			Fix:  err.Error(),
 		}}
 	}
 
 	var results []Result
-	results = append(results, Result{Name: "1Password CLI (op) installed", Pass: true})
+	results = append(results, Result{Name: "1Password CLI ready", Pass: true})
 
-	for _, ref := range opRefs {
+	for _, ref := range refs {
 		tctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		_, err := op.Resolve(tctx, ref.uri)
+		_, err := v.Get(tctx, ref.uri)
 		cancel()
 		name := ref.key + " accessible via op"
 		if err != nil {

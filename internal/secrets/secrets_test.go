@@ -261,3 +261,180 @@ func TestResolve_Plaintext(t *testing.T) {
 		t.Errorf("got %q, want plainvalue", got)
 	}
 }
+
+// --- OnePassword.Store ---
+
+// writeFakeOpStore returns a fake op binary that handles:
+//   - "account list" → exits 0 with an account line
+//   - "item get <title> --vault ..." → exits 1 (no existing item)
+//   - "item create --template ..." → exits 0
+func writeFakeOpStore(t *testing.T) string {
+	t.Helper()
+	script := `#!/bin/sh
+if [ "$1" = "account" ] && [ "$2" = "list" ]; then echo "test.1password.com"; exit 0; fi
+if [ "$1" = "item" ] && [ "$2" = "get" ]; then exit 1; fi
+if [ "$1" = "item" ] && [ "$2" = "create" ]; then echo "{}"; exit 0; fi
+exit 0
+`
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "op")
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake op: %v", err)
+	}
+	return bin
+}
+
+func TestOnePasswordStore_ReturnsOPRef(t *testing.T) {
+	bin := writeFakeOpStore(t)
+	o := &OnePassword{OpPath: bin}
+
+	ref, err := o.Store(context.Background(), "MyVault", "my-title", "private key", "pem-data")
+	if err != nil {
+		t.Fatalf("Store failed: %v", err)
+	}
+	if !strings.HasPrefix(ref, "op://") {
+		t.Errorf("expected op:// ref, got %q", ref)
+	}
+	if ref != "op://MyVault/my-title/private key" {
+		t.Errorf("unexpected ref format: %q", ref)
+	}
+}
+
+func TestOnePasswordStore_BinaryMissing(t *testing.T) {
+	o := &OnePassword{OpPath: "/nonexistent/op"}
+
+	_, err := o.Store(context.Background(), "vault", "title", "label", "value")
+	if err == nil {
+		t.Fatal("expected error when op binary is missing")
+	}
+}
+
+func TestOnePasswordStore_ItemCreateFails(t *testing.T) {
+	script := `#!/bin/sh
+if [ "$1" = "item" ] && [ "$2" = "get" ]; then exit 1; fi
+if [ "$1" = "item" ] && [ "$2" = "create" ]; then echo "create failed" >&2; exit 1; fi
+exit 0
+`
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "op")
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake op: %v", err)
+	}
+
+	o := &OnePassword{OpPath: bin}
+	_, err := o.Store(context.Background(), "vault", "title", "label", "value")
+	if err == nil {
+		t.Fatal("expected error when item create fails")
+	}
+	if !strings.Contains(err.Error(), "op item create") {
+		t.Errorf("expected 'op item create' in error, got: %v", err)
+	}
+}
+
+func TestOnePasswordStore_DeletesExistingItem(t *testing.T) {
+	// "item get" succeeds (item exists), "item delete" is called, "item create" succeeds.
+	deleteCalled := false
+	script := `#!/bin/sh
+if [ "$1" = "item" ] && [ "$2" = "get" ]; then printf '{"id":"abc123"}'; exit 0; fi
+if [ "$1" = "item" ] && [ "$2" = "delete" ]; then touch /tmp/cypher-test-delete-called; exit 0; fi
+if [ "$1" = "item" ] && [ "$2" = "create" ]; then echo "{}"; exit 0; fi
+exit 0
+`
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "op")
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake op: %v", err)
+	}
+
+	// Use a marker file in a temp dir instead of /tmp to avoid cross-test pollution.
+	markerDir := t.TempDir()
+	markerPath := filepath.Join(markerDir, "delete-called")
+	markerScript := fmt.Sprintf(`#!/bin/sh
+if [ "$1" = "item" ] && [ "$2" = "get" ]; then printf '{"id":"abc123"}'; exit 0; fi
+if [ "$1" = "item" ] && [ "$2" = "delete" ]; then touch %s; exit 0; fi
+if [ "$1" = "item" ] && [ "$2" = "create" ]; then echo "{}"; exit 0; fi
+exit 0
+`, markerPath)
+	if err := os.WriteFile(bin, []byte(markerScript), 0o755); err != nil {
+		t.Fatalf("write fake op: %v", err)
+	}
+
+	o := &OnePassword{OpPath: bin}
+	_, err := o.Store(context.Background(), "vault", "title", "label", "value")
+	if err != nil {
+		t.Fatalf("Store failed: %v", err)
+	}
+
+	if _, err := os.Stat(markerPath); os.IsNotExist(err) {
+		deleteCalled = false
+	} else {
+		deleteCalled = true
+	}
+	if !deleteCalled {
+		t.Error("expected existing item to be deleted before creating new one")
+	}
+}
+
+// --- FakeVault ---
+
+func TestFakeVault_RoundTrip(t *testing.T) {
+	fv := NewFakeVault()
+	ctx := context.Background()
+
+	ref, err := fv.Store(ctx, "vault", "title", "field", "myvalue")
+	if err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	if !strings.HasPrefix(ref, "op://") {
+		t.Errorf("expected op:// ref, got %q", ref)
+	}
+
+	got, err := fv.Get(ctx, ref)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got != "myvalue" {
+		t.Errorf("got %q, want %q", got, "myvalue")
+	}
+}
+
+func TestFakeVault_GetNotFound(t *testing.T) {
+	fv := NewFakeVault()
+	_, err := fv.Get(context.Background(), "op://vault/missing/field")
+	if err == nil {
+		t.Fatal("expected error for unknown ref")
+	}
+}
+
+func TestFakeVault_PreflightErr(t *testing.T) {
+	fv := &FakeVault{PreflightErr: fmt.Errorf("not ready")}
+	if err := fv.Preflight(context.Background()); err == nil {
+		t.Fatal("expected preflight error")
+	}
+}
+
+func TestFakeVault_StoreErr(t *testing.T) {
+	fv := &FakeVault{StoreErr: fmt.Errorf("store failed")}
+	_, err := fv.Store(context.Background(), "v", "t", "l", "val")
+	if err == nil {
+		t.Fatal("expected store error")
+	}
+}
+
+func TestFakeVault_GetErr(t *testing.T) {
+	fv := &FakeVault{GetErr: fmt.Errorf("get failed")}
+	_, err := fv.Get(context.Background(), "op://v/t/l")
+	if err == nil {
+		t.Fatal("expected get error")
+	}
+}
+
+func TestFakeVault_Handles(t *testing.T) {
+	fv := NewFakeVault()
+	if !fv.Handles("op://vault/item/field") {
+		t.Error("expected Handles=true for op:// ref")
+	}
+	if fv.Handles("plaintext") {
+		t.Error("expected Handles=false for plaintext")
+	}
+}

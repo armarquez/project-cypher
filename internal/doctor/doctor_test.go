@@ -2,6 +2,7 @@ package doctor
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -299,48 +300,37 @@ func TestCheckOpenHands_ServerError(t *testing.T) {
 
 // --- CheckSecrets ---
 
-func writeFakeOp(t *testing.T, script string) string {
-	t.Helper()
-	dir := t.TempDir()
-	bin := filepath.Join(dir, "op")
-	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"+script), 0o755); err != nil {
-		t.Fatalf("write fake op: %v", err)
-	}
-	return bin
-}
-
 func TestCheckSecrets_NoOpRefs(t *testing.T) {
 	t.Setenv("CYPHER_GH_TOKEN", "ghp_plaintoken")
-	op := &secrets.OnePassword{OpPath: "/nonexistent/op"}
-	results := CheckSecrets(context.Background(), []string{"CYPHER_GH_TOKEN"}, op)
+	results := CheckSecrets(context.Background(), []string{"CYPHER_GH_TOKEN"}, secrets.NewFakeVault())
 	if len(results) != 0 {
 		t.Errorf("expected no results when no op:// refs, got %d", len(results))
 	}
 }
 
-func TestCheckSecrets_OpCLIMissing(t *testing.T) {
+func TestCheckSecrets_VaultNotReady(t *testing.T) {
 	t.Setenv("CYPHER_GH_TOKEN", "op://vault/item/field")
-	op := &secrets.OnePassword{OpPath: "/nonexistent/op"}
-	results := CheckSecrets(context.Background(), []string{"CYPHER_GH_TOKEN"}, op)
+	fv := &secrets.FakeVault{PreflightErr: fmt.Errorf("1Password CLI not ready: binary not found")}
+	results := CheckSecrets(context.Background(), []string{"CYPHER_GH_TOKEN"}, fv)
 	if len(results) == 0 {
 		t.Fatal("expected at least one result")
 	}
-	if pass(results, "1Password CLI (op) installed") {
-		t.Error("expected fail when op CLI is missing")
+	if pass(results, "1Password CLI ready") {
+		t.Error("expected fail when vault preflight fails")
 	}
-	r := results[0]
-	if r.Fix == "" {
+	if results[0].Fix == "" {
 		t.Error("expected fix hint")
 	}
 }
 
 func TestCheckSecrets_ResolveSuccess(t *testing.T) {
 	t.Setenv("CYPHER_GH_TOKEN", "op://vault/item/field")
-	bin := writeFakeOp(t, "printf '%s' mysecret")
-	op := &secrets.OnePassword{OpPath: bin}
-	results := CheckSecrets(context.Background(), []string{"CYPHER_GH_TOKEN"}, op)
-	if !pass(results, "1Password CLI (op) installed") {
-		t.Error("expected op CLI check to pass")
+	fv := secrets.NewFakeVault()
+	// Pre-populate so Get succeeds.
+	fv.Store(context.Background(), "vault", "item", "field", "mysecret") //nolint:errcheck
+	results := CheckSecrets(context.Background(), []string{"CYPHER_GH_TOKEN"}, fv)
+	if !pass(results, "1Password CLI ready") {
+		t.Error("expected vault ready check to pass")
 	}
 	if !pass(results, "CYPHER_GH_TOKEN accessible via op") {
 		t.Errorf("expected secret accessible, results: %v", results)
@@ -349,21 +339,19 @@ func TestCheckSecrets_ResolveSuccess(t *testing.T) {
 
 func TestCheckSecrets_ResolveFails(t *testing.T) {
 	t.Setenv("CYPHER_GH_TOKEN", "op://vault/item/field")
-	bin := writeFakeOp(t, "echo 'not signed in' >&2; exit 1")
-	op := &secrets.OnePassword{OpPath: bin}
-	results := CheckSecrets(context.Background(), []string{"CYPHER_GH_TOKEN"}, op)
-	if !pass(results, "1Password CLI (op) installed") {
-		t.Error("expected op CLI check to pass")
+	fv := &secrets.FakeVault{GetErr: fmt.Errorf("not signed in")}
+	results := CheckSecrets(context.Background(), []string{"CYPHER_GH_TOKEN"}, fv)
+	if !pass(results, "1Password CLI ready") {
+		t.Error("expected vault ready check to pass")
 	}
 	if pass(results, "CYPHER_GH_TOKEN accessible via op") {
-		t.Error("expected secret check to fail when op read exits non-zero")
+		t.Error("expected secret check to fail when Get returns error")
 	}
 }
 
 func TestCheckSecrets_UnsetVarSkipped(t *testing.T) {
 	t.Setenv("CYPHER_GH_TOKEN", "")
-	op := &secrets.OnePassword{OpPath: "/nonexistent/op"}
-	results := CheckSecrets(context.Background(), []string{"CYPHER_GH_TOKEN"}, op)
+	results := CheckSecrets(context.Background(), []string{"CYPHER_GH_TOKEN"}, secrets.NewFakeVault())
 	if len(results) != 0 {
 		t.Errorf("expected no results for unset var, got %d", len(results))
 	}

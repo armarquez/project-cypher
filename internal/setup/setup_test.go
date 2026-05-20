@@ -17,6 +17,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/armarquez/project-cypher/internal/secrets"
 )
 
 // --- GenerateManifest ---
@@ -233,69 +235,6 @@ func TestWriteCredentials_UpdatesExistingKeys(t *testing.T) {
 	}
 	if !strings.Contains(env, "SOME_OTHER_VAR=keep") {
 		t.Errorf(".env dropped SOME_OTHER_VAR, got:\n%s", env)
-	}
-}
-
-// --- StorePEMIn1Password ---
-
-func writeFakeOpCreate(t *testing.T, script string) string {
-	t.Helper()
-	dir := t.TempDir()
-	bin := filepath.Join(dir, "op")
-	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"+script), 0o755); err != nil {
-		t.Fatalf("write fake op: %v", err)
-	}
-	return bin
-}
-
-func TestStorePEMIn1Password_Success(t *testing.T) {
-	// item get: returns not-found (no pre-existing item); item create: succeeds.
-	bin := writeFakeOpCreate(t, `
-if [ "$1" = "item" ] && [ "$2" = "get" ]; then exit 1; fi
-exit 0`)
-
-	uri, err := StorePEMIn1Password(context.Background(), bin,
-		"-----BEGIN RSA PRIVATE KEY-----\nfake\n-----END RSA PRIVATE KEY-----\n",
-		"testorg-testrepo", "Private")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !strings.HasPrefix(uri, "op://Private/cypher-testorg-testrepo-key/") {
-		t.Errorf("unexpected URI: %s", uri)
-	}
-}
-
-func TestStorePEMIn1Password_ItemCreateFails(t *testing.T) {
-	// item get: not found (no pre-existing item); item create: fails.
-	bin := writeFakeOpCreate(t, `
-if [ "$1" = "item" ] && [ "$2" = "get" ]; then exit 1; fi
-echo 'vault not found' >&2; exit 1`)
-
-	_, err := StorePEMIn1Password(context.Background(), bin,
-		"-----BEGIN RSA PRIVATE KEY-----\nfake\n-----END RSA PRIVATE KEY-----\n",
-		"testorg-testrepo", "Private")
-	if err == nil {
-		t.Fatal("expected error when item create fails")
-	}
-}
-
-func TestStorePEMIn1Password_DeletesExistingBeforeCreate(t *testing.T) {
-	// item get: returns a JSON item with an ID → delete is called; item delete: succeeds; item create: succeeds.
-	bin := writeFakeOpCreate(t, `
-if [ "$1" = "item" ] && [ "$2" = "get" ]; then
-  printf '{"id":"abc123"}'
-  exit 0
-fi
-exit 0`)
-
-	uri, err := StorePEMIn1Password(context.Background(), bin,
-		"-----BEGIN RSA PRIVATE KEY-----\nfake\n-----END RSA PRIVATE KEY-----\n",
-		"testorg-testrepo", "Private")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !strings.HasPrefix(uri, "op://Private/cypher-testorg-testrepo-key/") {
-		t.Errorf("unexpected URI: %s", uri)
 	}
 }
 
@@ -574,12 +513,6 @@ func TestRun_EndToEnd_1Password(t *testing.T) {
 	}))
 	defer fakeAPI.Close()
 
-	// Fake `op` binary: account list returns a fake account; item create succeeds.
-	fakeOp := writeFakeOpCreate(t, `
-if [ "$1" = "account" ] && [ "$2" = "list" ]; then echo "test.1password.com"; exit 0; fi
-exit 0
-`)
-
 	dir := t.TempDir()
 	var stdout strings.Builder
 
@@ -600,7 +533,7 @@ exit 0
 		},
 		PEMStorage: "1password",
 		OPVault:    "TestVault",
-		OpPath:     fakeOp,
+		Vault:      secrets.NewFakeVault(),
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -821,9 +754,6 @@ func TestRun_Resume_HasInstall_NoPEM(t *testing.T) {
 // PEMStorage=1password and the op CLI is not authenticated, without starting
 // the GitHub App browser flow.
 func TestRun_1PasswordPreflight_Fails(t *testing.T) {
-	// Fake op: account list fails (desktop app not running, no session).
-	fakeOp := writeFakeOpCreate(t, "echo '[ERROR] no accounts found' >&2; exit 1")
-
 	// The fake API should NOT be called if the preflight fails first.
 	apiCalled := false
 	fakeAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -841,7 +771,7 @@ func TestRun_1PasswordPreflight_Fails(t *testing.T) {
 		Stdout:        &stdout,
 		OnServerReady: func(int) {},
 		PEMStorage:    "1password",
-		OpPath:        fakeOp,
+		Vault:         &secrets.FakeVault{PreflightErr: fmt.Errorf("1Password CLI not ready: no accounts found")},
 	}
 
 	err := Run(context.Background(), cfg)
