@@ -247,3 +247,43 @@ Distributed across home network. **Not the current build target — do not desig
 | Ephemeral runtimes | Every task starts with a clean container; nuked on PR submission. |
 | Least privilege | GitHub tokens scoped to specific repos and branches. PR merge requires human approval. |
 | HITL non-negotiable | The Control Plane enforces escalation for defined trigger categories regardless of what the Architect LLM recommends. |
+
+---
+
+## 9. Secrets Management
+
+The Go Control Plane stores credentials in 1Password via the `op` CLI and retrieves them at runtime using `op://vault/item/field` references. The `secrets` package provides the abstraction:
+
+- **`Vault` interface** — `Preflight`, `Store`, `Get`, `Handles`. Generic, not 1Password-shaped. Future backends (e.g. OS keychain) implement the same interface.
+- **`OnePassword` struct** — wraps the `op` CLI binary. Implements both `Vault` and `Resolver` (for runtime secret chain resolution).
+- **`FakeVault`** — in-memory implementation used in unit tests. Supports injectable errors for all operations.
+- **`Chain`** — resolves a secret reference by trying each registered `Resolver` in order; falls through to plaintext for non-URI values.
+
+### Testing Strategy
+
+Unit tests inject `FakeVault` — no subprocess, no network, deterministic. Integration tests (`//go:build integration`) hit the real `op` binary and are gated by `CYPHER_TEST_OP_VAULT`:
+
+```bash
+CYPHER_TEST_OP_VAULT=Private just test-integration
+```
+
+CI never runs integration tests. They are developer-run checkpoints before changing `OnePassword` internals.
+
+### WSL2 + op.exe Constraint
+
+On WSL2, `op` is not available as a native Linux binary. The 1Password desktop app integration requires `op.exe` (the Windows binary), which is found via `exec.LookPath("op.exe")` on Linux.
+
+**Critical behavior:** `op.exe` unconditionally reads stdin as a JSON template whenever stdin is a non-TTY pipe. This is true even when `cmd.Stdin` is nil or set to an empty reader in Go — the WSL2 interop layer connects the Windows process to the Windows console handle before Go's abstractions apply. Approaches that do not work:
+
+- `cmd.Stdin = nil` — pipe is open at process start; op.exe treats it as incoming JSON
+- `cmd.Stdin = bytes.NewReader(nil)` — same: open pipe before EOF closes it
+- `bash -c '... </dev/null'` — WSL2 does not reliably translate `/dev/null` to Windows NUL for Windows binaries
+
+**What works:** Pipe the complete item template as JSON to `op item create` stdin with no `--template` flag:
+
+```go
+cmd := exec.CommandContext(ctx, o.bin(), "item", "create")
+cmd.Stdin = bytes.NewReader(tmplJSON) // op reads, parses, creates
+```
+
+This is op's documented piped-input path (`op item get ... | op item create`). Other subcommands (`op read`, `op account list`, `op item get`, `op item delete`) do not exhibit this behavior and work correctly with nil stdin.
