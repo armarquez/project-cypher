@@ -1,6 +1,7 @@
 package secrets
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -75,22 +76,44 @@ func (o *OnePassword) Preflight(ctx context.Context) error {
 // Any existing item with the same title is deleted first to avoid duplicates
 // (avoids --upsert which is absent in some op CLI versions).
 //
-// Field assignment syntax is used instead of --template to avoid the stdin
-// conflict: op CLI 2.x treats any non-TTY stdin as piped JSON, which conflicts
-// with --template in scripted/test contexts where stdin is a pipe, not a TTY.
+// The item template is piped to op via stdin rather than passed as --template
+// <file> or as command-line field assignments. op CLI reads a JSON template
+// from stdin whenever stdin is a non-TTY pipe — which is true in any scripted
+// or test context. Providing valid JSON is the only reliable way to satisfy
+// that read without triggering "cannot create an item from template and stdin
+// at the same time" (--template conflicts) or "invalid JSON in piped input"
+// (field-assignment args conflict). This is also op's documented piped-input
+// path: `op item get ... | op item create`.
 func (o *OnePassword) Store(ctx context.Context, vault, title, label, value string) (string, error) {
+	type opField struct {
+		Label string `json:"label"`
+		Type  string `json:"type"`
+		Value string `json:"value"`
+	}
+	type opItem struct {
+		Title    string            `json:"title"`
+		Vault    map[string]string `json:"vault"`
+		Category string            `json:"category"`
+		Fields   []opField         `json:"fields"`
+	}
+
+	tmpl := opItem{
+		Title:    title,
+		Vault:    map[string]string{"name": vault},
+		Category: "API_CREDENTIAL",
+		Fields:   []opField{{Label: label, Type: "CONCEALED", Value: value}},
+	}
+	tmplJSON, err := json.Marshal(tmpl)
+	if err != nil {
+		return "", fmt.Errorf("marshal item: %w", err)
+	}
+
 	// Delete any pre-existing item to avoid accumulating duplicates.
 	o.deleteExisting(ctx, vault, title)
 
-	// Pass the value as a field assignment arg. Go exec passes this as a single
-	// OS argument so newlines (e.g. in PEM keys) are handled correctly without
-	// shell escaping.
-	out, err := exec.CommandContext(ctx, o.bin(), "item", "create",
-		"--vault", vault,
-		"--category", "API Credential",
-		"--title", title,
-		label+"[concealed]="+value,
-	).CombinedOutput()
+	cmd := exec.CommandContext(ctx, o.bin(), "item", "create")
+	cmd.Stdin = bytes.NewReader(tmplJSON)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
 		if msg == "" {
