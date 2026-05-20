@@ -1,6 +1,7 @@
 package secrets
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -124,10 +125,17 @@ func (o *OnePassword) Store(ctx context.Context, vault, title, label, value stri
 		}
 	}
 
-	out, err := exec.CommandContext(ctx, o.bin(), "item", "create",
+	// Set Stdin explicitly to an empty reader. On WSL2, the interop layer passes
+	// the Windows console handle to .exe processes regardless of Go's nil-stdin
+	// convention, causing `op item create` to see both --template and a live stdin
+	// and reject the call with "cannot create an item from template and stdin at
+	// the same time".
+	cmd := exec.CommandContext(ctx, o.bin(), "item", "create",
 		"--template", templateArg,
 		"--vault", vault,
-	).CombinedOutput()
+	)
+	cmd.Stdin = bytes.NewReader(nil)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
 		if msg == "" {
