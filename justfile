@@ -29,6 +29,12 @@ test:
 test-pkg PKG:
     go test ./internal/{{PKG}}/... -v
 
+# Run integration tests against the real op CLI.
+# Requires: CYPHER_TEST_OP_VAULT set to an existing vault name, op CLI authenticated.
+# Example: CYPHER_TEST_OP_VAULT=Private just test-integration
+test-integration:
+    go test -tags integration ./internal/secrets/... -v -count=1
+
 # Run tests and print function-level coverage report (internal packages only — cmd/ is excluded)
 coverage:
     go test -coverprofile=coverage.out ./internal/...
