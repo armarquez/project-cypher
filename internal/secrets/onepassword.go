@@ -1,12 +1,10 @@
 package secrets
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -76,75 +74,23 @@ func (o *OnePassword) Preflight(ctx context.Context) error {
 // and returns the op:// reference for later retrieval via Get.
 // Any existing item with the same title is deleted first to avoid duplicates
 // (avoids --upsert which is absent in some op CLI versions).
+//
+// Field assignment syntax is used instead of --template to avoid the stdin
+// conflict: op CLI 2.x treats any non-TTY stdin as piped JSON, which conflicts
+// with --template in scripted/test contexts where stdin is a pipe, not a TTY.
 func (o *OnePassword) Store(ctx context.Context, vault, title, label, value string) (string, error) {
-	type opField struct {
-		Label string `json:"label"`
-		Type  string `json:"type"`
-		Value string `json:"value"`
-	}
-	type opTemplate struct {
-		Title    string            `json:"title"`
-		Vault    map[string]string `json:"vault"`
-		Category string            `json:"category"`
-		Fields   []opField         `json:"fields"`
-	}
-
-	tmpl := opTemplate{
-		Title:    title,
-		Vault:    map[string]string{"name": vault},
-		Category: "API_CREDENTIAL",
-		Fields:   []opField{{Label: label, Type: "CONCEALED", Value: value}},
-	}
-	templateJSON, err := json.Marshal(tmpl)
-	if err != nil {
-		return "", fmt.Errorf("marshal template: %w", err)
-	}
-
-	// Write template to a temp file: older op versions don't support --template - (stdin).
-	tmpFile, err := os.CreateTemp("", "cypher-op-*.json")
-	if err != nil {
-		return "", fmt.Errorf("create temp file: %w", err)
-	}
-	tmpPath := tmpFile.Name()
-	defer os.Remove(tmpPath)
-	if _, err := tmpFile.Write(templateJSON); err != nil {
-		tmpFile.Close()
-		return "", fmt.Errorf("write template: %w", err)
-	}
-	tmpFile.Close()
-
 	// Delete any pre-existing item to avoid accumulating duplicates.
 	o.deleteExisting(ctx, vault, title)
 
-	// op.exe is a Windows binary and cannot open a Linux path like /tmp/...
-	// Convert to a Windows UNC path via wslpath so it can access the file.
-	templateArg := tmpPath
-	if strings.HasSuffix(o.bin(), ".exe") {
-		if winPath, err := wslToWindowsPath(ctx, tmpPath); err == nil {
-			templateArg = winPath
-		}
-	}
-
-	// Build the item-create command. op.exe (Windows binary via WSL2 interop)
-	// treats any non-TTY stdin as piped JSON input; even an empty Go pipe
-	// triggers "cannot create an item from template and stdin at the same time".
-	// Wrapping the call in bash with </dev/null causes the interop layer to
-	// translate /dev/null → Windows NUL before the process starts, which op.exe
-	// correctly treats as "no stdin". Native Linux op gets a plain empty reader.
-	var cmd *exec.Cmd
-	if strings.HasSuffix(o.bin(), ".exe") {
-		// Positional args: $0="--", $1=binary, $2=template, $3=vault
-		cmd = exec.CommandContext(ctx, "bash", "-c",
-			`exec "$1" item create --template "$2" --vault "$3" </dev/null`,
-			"--", o.bin(), templateArg, vault)
-	} else {
-		cmd = exec.CommandContext(ctx, o.bin(), "item", "create",
-			"--template", templateArg,
-			"--vault", vault,
-		)
-		cmd.Stdin = bytes.NewReader(nil)
-	}
-	out, err := cmd.CombinedOutput()
+	// Pass the value as a field assignment arg. Go exec passes this as a single
+	// OS argument so newlines (e.g. in PEM keys) are handled correctly without
+	// shell escaping.
+	out, err := exec.CommandContext(ctx, o.bin(), "item", "create",
+		"--vault", vault,
+		"--category", "API Credential",
+		"--title", title,
+		label+"[concealed]="+value,
+	).CombinedOutput()
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
 		if msg == "" {
@@ -171,16 +117,6 @@ func (o *OnePassword) deleteExisting(ctx context.Context, vault, title string) {
 		return
 	}
 	exec.CommandContext(ctx, o.bin(), "item", "delete", item.ID, "--vault", vault).Run() //nolint:errcheck
-}
-
-// wslToWindowsPath converts a Linux path to a Windows UNC path using wslpath,
-// so that Windows binaries (e.g. op.exe) can access files on the WSL2 filesystem.
-func wslToWindowsPath(ctx context.Context, linuxPath string) (string, error) {
-	out, err := exec.CommandContext(ctx, "wslpath", "-w", linuxPath).Output()
-	if err != nil {
-		return "", fmt.Errorf("wslpath: %w", err)
-	}
-	return strings.TrimSpace(string(out)), nil
 }
 
 // bin returns the op binary to use. When OpPath is set it is used directly.
