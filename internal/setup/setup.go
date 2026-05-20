@@ -57,6 +57,9 @@ type Config struct {
 	OPVault string
 	// OpPath overrides the path to the `op` CLI binary. Defaults to "op" from PATH.
 	OpPath string
+	// Vault is the secrets vault used to store the GitHub App private key.
+	// If nil, a 1Password vault backed by the op CLI is constructed from OpPath.
+	Vault secrets.Vault
 }
 
 func (c *Config) apiBase() string {
@@ -92,6 +95,13 @@ func (c *Config) opVault() string {
 		return c.OPVault
 	}
 	return "Private"
+}
+
+func (c *Config) vault() secrets.Vault {
+	if c.Vault != nil {
+		return c.Vault
+	}
+	return &secrets.OnePassword{OpPath: c.opBin()}
 }
 
 func (c *Config) opBin() string {
@@ -295,106 +305,6 @@ func tryGetInstallation(ctx context.Context, client *http.Client, apiBase, jwtTo
 	return 0, nil
 }
 
-// StorePEMIn1Password stores pemContent as a concealed field in a 1Password item
-// and returns the op:// URI to read it back. Uses `op item create --template -`
-// so the multiline PEM is passed via stdin JSON — no shell-escaping issues.
-// Any existing item with the same title is deleted first to avoid duplicates
-// (replaces --upsert which is not available in older op CLI versions).
-func StorePEMIn1Password(ctx context.Context, opPath, pemContent, slug, vault string) (string, error) {
-	title := "cypher-" + slug + "-key"
-
-	type opField struct {
-		Label string `json:"label"`
-		Type  string `json:"type"`
-		Value string `json:"value"`
-	}
-	type opTemplate struct {
-		Title    string            `json:"title"`
-		Vault    map[string]string `json:"vault"`
-		Category string            `json:"category"`
-		Fields   []opField         `json:"fields"`
-	}
-
-	tmpl := opTemplate{
-		Title:    title,
-		Vault:    map[string]string{"name": vault},
-		Category: "API_CREDENTIAL",
-		Fields: []opField{
-			{Label: "private key", Type: "CONCEALED", Value: pemContent},
-		},
-	}
-	templateJSON, err := json.Marshal(tmpl)
-	if err != nil {
-		return "", fmt.Errorf("marshal template: %w", err)
-	}
-
-	// Write template to a temp file: older op versions don't support --template - (stdin).
-	tmpFile, err := os.CreateTemp("", "cypher-op-*.json")
-	if err != nil {
-		return "", fmt.Errorf("create temp file: %w", err)
-	}
-	tmpPath := tmpFile.Name()
-	defer os.Remove(tmpPath)
-	if _, err := tmpFile.Write(templateJSON); err != nil {
-		tmpFile.Close()
-		return "", fmt.Errorf("write template: %w", err)
-	}
-	tmpFile.Close()
-
-	// Delete any pre-existing item so create doesn't accumulate duplicates.
-	deleteExistingOPItem(ctx, opPath, title, vault)
-
-	// op.exe is a Windows binary and cannot open a Linux path like /tmp/...
-	// Convert to a Windows UNC path via wslpath so it can access the file.
-	templateArg := tmpPath
-	if strings.HasSuffix(opPath, ".exe") {
-		if winPath, err := wslToWindowsPath(ctx, tmpPath); err == nil {
-			templateArg = winPath
-		}
-	}
-
-	cmd := exec.CommandContext(ctx, opPath, "item", "create",
-		"--template", templateArg,
-		"--vault", vault,
-	)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		msg := strings.TrimSpace(string(out))
-		if msg == "" {
-			msg = err.Error()
-		}
-		return "", fmt.Errorf("op item create: %s", msg)
-	}
-
-	return fmt.Sprintf("op://%s/%s/private key", vault, title), nil
-}
-
-// wslToWindowsPath converts a Linux path to a Windows UNC path using wslpath,
-// so that Windows binaries (e.g. op.exe) can access files on the WSL2 filesystem.
-func wslToWindowsPath(ctx context.Context, linuxPath string) (string, error) {
-	out, err := exec.CommandContext(ctx, "wslpath", "-w", linuxPath).Output()
-	if err != nil {
-		return "", fmt.Errorf("wslpath: %w", err)
-	}
-	return strings.TrimSpace(string(out)), nil
-}
-
-// deleteExistingOPItem looks up an item by title and deletes it if found.
-// Errors are silently ignored — the item simply may not exist yet.
-func deleteExistingOPItem(ctx context.Context, opPath, title, vault string) {
-	out, err := exec.CommandContext(ctx, opPath, "item", "get", title,
-		"--vault", vault, "--format", "json").Output()
-	if err != nil {
-		return
-	}
-	var item struct {
-		ID string `json:"id"`
-	}
-	if json.Unmarshal(out, &item) != nil || item.ID == "" {
-		return
-	}
-	exec.CommandContext(ctx, opPath, "item", "delete", item.ID, "--vault", vault).Run() //nolint:errcheck
-}
 
 // WriteCredentials persists App credentials to .env and optionally to disk.
 //
@@ -559,8 +469,7 @@ func Run(ctx context.Context, cfg Config) error {
 	// Pre-flight: verify 1Password is ready before starting the GitHub App flow,
 	// so auth failures surface immediately rather than after the browser steps.
 	if cfg.PEMStorage == "1password" {
-		op := &secrets.OnePassword{OpPath: cfg.opBin()}
-		if err := op.Preflight(ctx); err != nil {
+		if err := cfg.vault().Preflight(ctx); err != nil {
 			return err
 		}
 		fmt.Fprintf(out, "✓ 1Password authenticated\n\n")
@@ -791,10 +700,11 @@ func resolvePEMStorage(ctx context.Context, cfg Config, creds *AppCredentials, c
 
 	var pemRef string
 	storeInOP := func() error {
-		vault := cfg.opVault()
-		fmt.Fprintf(out, "  Storing in 1Password vault %q...\n", vault)
+		v := cfg.opVault()
+		title := "cypher-" + creds.Slug + "-key"
+		fmt.Fprintf(out, "  Storing in 1Password vault %q...\n", v)
 		var err error
-		pemRef, err = StorePEMIn1Password(ctx, cfg.opBin(), creds.PEM, creds.Slug, vault)
+		pemRef, err = cfg.vault().Store(ctx, v, title, "private key", creds.PEM)
 		if err != nil {
 			return fmt.Errorf("store PEM in 1Password: %w", err)
 		}
