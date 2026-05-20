@@ -125,6 +125,33 @@ func (o *OnePassword) Store(ctx context.Context, vault, title, label, value stri
 	return fmt.Sprintf("op://%s/%s/%s", vault, title, label), nil
 }
 
+// Delete removes the item identified by ref. Returns nil if the item does not
+// exist (idempotent). ref must be an op:// URI with at least vault/title segments.
+func (o *OnePassword) Delete(ctx context.Context, ref string) error {
+	parts := strings.SplitN(strings.TrimPrefix(ref, opScheme), "/", 3)
+	if len(parts) < 2 {
+		return fmt.Errorf("invalid op:// ref: %s", ref)
+	}
+	vault, title := parts[0], parts[1]
+
+	out, err := exec.CommandContext(ctx, o.bin(), "item", "get", title,
+		"--vault", vault, "--format", "json").Output()
+	if err != nil {
+		return nil // item doesn't exist
+	}
+	var item struct {
+		ID string `json:"id"`
+	}
+	if json.Unmarshal(out, &item) != nil || item.ID == "" {
+		return nil
+	}
+	if out, err := exec.CommandContext(ctx, o.bin(), "item", "delete", item.ID,
+		"--vault", vault).CombinedOutput(); err != nil {
+		return fmt.Errorf("op item delete: %s", strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // deleteExisting looks up an item by title and deletes it if found.
 // Errors are silently ignored — the item simply may not exist yet.
 func (o *OnePassword) deleteExisting(ctx context.Context, vault, title string) {

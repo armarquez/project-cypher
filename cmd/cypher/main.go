@@ -102,22 +102,33 @@ func runSetup(args []string) {
 	appName := fs.String("app-name", "", `GitHub App name (default: "cypher-{owner}-{repo}"); use when the default name is already taken`)
 	pemStorage := fs.String("pem-storage", "", `where to store the GitHub App private key: "file" or "1password" (default: prompt interactively)`)
 	opVault := fs.String("op-vault", "Private", `1Password vault name (used when --pem-storage=1password)`)
+	dryRun := fs.Bool("dry-run", false, "validate vault / filesystem access without creating a GitHub App or writing .env")
 	fs.Parse(args) //nolint:errcheck
+
+	setupCfg := setup.Config{
+		EnvPath:    *envPath,
+		CypherDir:  *cypherDir,
+		AppName:    *appName,
+		PEMStorage: *pemStorage,
+		OPVault:    *opVault,
+	}
+
+	if *dryRun {
+		if err := setup.DryRun(context.Background(), setupCfg); err != nil {
+			fmt.Fprintf(os.Stderr, "dry-run failed: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "load config: %v\n", err)
 		os.Exit(1)
 	}
+	setupCfg.TargetRepo = cfg.TargetRepo
 
-	if err := setup.Run(context.Background(), setup.Config{
-		TargetRepo: cfg.TargetRepo,
-		EnvPath:    *envPath,
-		CypherDir:  *cypherDir,
-		AppName:    *appName,
-		PEMStorage: *pemStorage,
-		OPVault:    *opVault,
-	}); err != nil {
+	if err := setup.Run(context.Background(), setupCfg); err != nil {
 		fmt.Fprintf(os.Stderr, "setup failed: %v\n", err)
 		os.Exit(1)
 	}

@@ -455,6 +455,90 @@ func promptPEMStorage(r io.Reader, w io.Writer) string {
 	return "1password"
 }
 
+// DryRun validates the vault (or filesystem) configuration without writing any
+// files or creating a GitHub App. It is a non-destructive smoke test.
+//
+// For 1password mode (default): runs Preflight, stores a throwaway item,
+// reads it back, then deletes it.
+// For file mode: verifies write permission to CypherDir.
+func DryRun(ctx context.Context, cfg Config) error {
+	out := cfg.stdout()
+
+	if cfg.PEMStorage == "file" {
+		return dryRunFile(cfg, out)
+	}
+	return dryRunVault(ctx, cfg, out)
+}
+
+func dryRunVault(ctx context.Context, cfg Config, out io.Writer) error {
+	vault := cfg.opVault()
+	v := cfg.vault()
+
+	fmt.Fprintln(out, "Dry-run: validating 1Password vault setup")
+	fmt.Fprintln(out)
+
+	if err := v.Preflight(ctx); err != nil {
+		fmt.Fprintf(out, "  ✗ vault preflight: %v\n", err)
+		return fmt.Errorf("vault preflight: %w", err)
+	}
+	fmt.Fprintln(out, "  ✓ vault authenticated (Preflight)")
+
+	title := fmt.Sprintf("cypher-dryrun-%d", time.Now().UnixNano())
+	ref, err := v.Store(ctx, vault, title, "value", "dry-run-token")
+	if err != nil {
+		fmt.Fprintf(out, "  ✗ Store failed: %v\n", err)
+		return fmt.Errorf("vault store: %w", err)
+	}
+	fmt.Fprintf(out, "  ✓ Store succeeded → %s\n", ref)
+
+	got, err := v.Get(ctx, ref)
+	if err != nil {
+		fmt.Fprintf(out, "  ✗ Get failed: %v\n", err)
+		v.Delete(ctx, ref) //nolint:errcheck
+		return fmt.Errorf("vault get: %w", err)
+	}
+	if got != "dry-run-token" {
+		fmt.Fprintf(out, "  ✗ Get round-trip mismatch: got %q\n", got)
+		v.Delete(ctx, ref) //nolint:errcheck
+		return fmt.Errorf("vault round-trip failed: got %q, want %q", got, "dry-run-token")
+	}
+	fmt.Fprintln(out, "  ✓ Get round-trip matches")
+
+	if err := v.Delete(ctx, ref); err != nil {
+		fmt.Fprintf(out, "  ✗ Delete failed: %v\n", err)
+		return fmt.Errorf("vault delete: %w", err)
+	}
+	fmt.Fprintln(out, "  ✓ Delete succeeded")
+
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "All checks passed. You can now run `cypher setup` for real.")
+	return nil
+}
+
+func dryRunFile(cfg Config, out io.Writer) error {
+	dir := cfg.cypherDir()
+
+	fmt.Fprintln(out, "Dry-run: validating file storage setup")
+	fmt.Fprintln(out)
+
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		fmt.Fprintf(out, "  ✗ cannot create %s: %v\n", dir, err)
+		return fmt.Errorf("cannot create %s: %w", dir, err)
+	}
+	tmp, err := os.CreateTemp(dir, ".dryrun-*")
+	if err != nil {
+		fmt.Fprintf(out, "  ✗ cannot write to %s: %v\n", dir, err)
+		return fmt.Errorf("cannot write to %s: %w", dir, err)
+	}
+	tmp.Close()
+	os.Remove(tmp.Name()) //nolint:errcheck
+
+	fmt.Fprintf(out, "  ✓ write permission verified: %s\n", dir)
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "All checks passed. You can now run `cypher setup` for real.")
+	return nil
+}
+
 // Run executes the full setup flow with resume support.
 // If a previous run wrote partial credentials to .env, it resumes from the
 // last completed step rather than starting over.
