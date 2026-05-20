@@ -125,16 +125,25 @@ func (o *OnePassword) Store(ctx context.Context, vault, title, label, value stri
 		}
 	}
 
-	// Set Stdin explicitly to an empty reader. On WSL2, the interop layer passes
-	// the Windows console handle to .exe processes regardless of Go's nil-stdin
-	// convention, causing `op item create` to see both --template and a live stdin
-	// and reject the call with "cannot create an item from template and stdin at
-	// the same time".
-	cmd := exec.CommandContext(ctx, o.bin(), "item", "create",
-		"--template", templateArg,
-		"--vault", vault,
-	)
-	cmd.Stdin = bytes.NewReader(nil)
+	// Build the item-create command. op.exe (Windows binary via WSL2 interop)
+	// treats any non-TTY stdin as piped JSON input; even an empty Go pipe
+	// triggers "cannot create an item from template and stdin at the same time".
+	// Wrapping the call in bash with </dev/null causes the interop layer to
+	// translate /dev/null → Windows NUL before the process starts, which op.exe
+	// correctly treats as "no stdin". Native Linux op gets a plain empty reader.
+	var cmd *exec.Cmd
+	if strings.HasSuffix(o.bin(), ".exe") {
+		// Positional args: $0="--", $1=binary, $2=template, $3=vault
+		cmd = exec.CommandContext(ctx, "bash", "-c",
+			`exec "$1" item create --template "$2" --vault "$3" </dev/null`,
+			"--", o.bin(), templateArg, vault)
+	} else {
+		cmd = exec.CommandContext(ctx, o.bin(), "item", "create",
+			"--template", templateArg,
+			"--vault", vault,
+		)
+		cmd.Stdin = bytes.NewReader(nil)
+	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
