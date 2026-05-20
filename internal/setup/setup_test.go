@@ -813,3 +813,146 @@ func TestNormalizePEMPath(t *testing.T) {
 		}
 	}
 }
+
+// --- DryRun ---
+
+func TestDryRun_1Password_Success(t *testing.T) {
+	var out strings.Builder
+	cfg := Config{
+		PEMStorage: "1password",
+		OPVault:    "TestVault",
+		Stdout:     &out,
+		Vault:      secrets.NewFakeVault(),
+	}
+
+	if err := DryRun(context.Background(), cfg); err != nil {
+		t.Fatalf("DryRun failed: %v", err)
+	}
+
+	got := out.String()
+	for _, want := range []string{
+		"vault authenticated",
+		"Store succeeded",
+		"Get round-trip matches",
+		"Delete succeeded",
+		"All checks passed",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestDryRun_1Password_PreflightFails(t *testing.T) {
+	var out strings.Builder
+	cfg := Config{
+		PEMStorage: "1password",
+		Stdout:     &out,
+		Vault:      &secrets.FakeVault{PreflightErr: fmt.Errorf("not authenticated")},
+	}
+
+	err := DryRun(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("expected error when preflight fails")
+	}
+	if !strings.Contains(out.String(), "✗") {
+		t.Error("expected failure indicator in output")
+	}
+}
+
+func TestDryRun_1Password_StoreFails(t *testing.T) {
+	var out strings.Builder
+	cfg := Config{
+		PEMStorage: "1password",
+		Stdout:     &out,
+		Vault:      &secrets.FakeVault{StoreErr: fmt.Errorf("vault locked")},
+	}
+
+	err := DryRun(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("expected error when store fails")
+	}
+}
+
+func TestDryRun_1Password_GetFails(t *testing.T) {
+	var out strings.Builder
+	cfg := Config{
+		PEMStorage: "1password",
+		OPVault:    "TestVault",
+		Stdout:     &out,
+		Vault:      &secrets.FakeVault{GetErr: fmt.Errorf("permission denied")},
+	}
+
+	err := DryRun(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("expected error when get fails")
+	}
+}
+
+func TestDryRun_1Password_DefaultMode(t *testing.T) {
+	// PEMStorage="" should default to vault path
+	var out strings.Builder
+	cfg := Config{
+		Stdout: &out,
+		Vault:  secrets.NewFakeVault(),
+	}
+
+	if err := DryRun(context.Background(), cfg); err != nil {
+		t.Fatalf("DryRun with empty PEMStorage failed: %v", err)
+	}
+	if !strings.Contains(out.String(), "All checks passed") {
+		t.Error("expected success output")
+	}
+}
+
+func TestDryRun_File_Success(t *testing.T) {
+	dir := t.TempDir()
+	var out strings.Builder
+	cfg := Config{
+		PEMStorage: "file",
+		CypherDir:  dir,
+		Stdout:     &out,
+	}
+
+	if err := DryRun(context.Background(), cfg); err != nil {
+		t.Fatalf("DryRun file mode failed: %v", err)
+	}
+
+	got := out.String()
+	if !strings.Contains(got, "write permission verified") {
+		t.Errorf("expected write permission confirmation:\n%s", got)
+	}
+	if !strings.Contains(got, "All checks passed") {
+		t.Errorf("expected success message:\n%s", got)
+	}
+
+	// Verify no temp files were left behind
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".dryrun-") {
+			t.Errorf("dry-run left temp file: %s", e.Name())
+		}
+	}
+}
+
+func TestDryRun_File_NoWritePermission(t *testing.T) {
+	dir := t.TempDir()
+	// Make the dir read-only
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Skip("cannot chmod temp dir:", err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o700) }) //nolint:errcheck
+
+	subdir := filepath.Join(dir, "cypher")
+	var out strings.Builder
+	cfg := Config{
+		PEMStorage: "file",
+		CypherDir:  subdir,
+		Stdout:     &out,
+	}
+
+	err := DryRun(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("expected error when directory is not writable")
+	}
+}

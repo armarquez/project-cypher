@@ -438,3 +438,72 @@ func TestFakeVault_Handles(t *testing.T) {
 		t.Error("expected Handles=false for plaintext")
 	}
 }
+
+func TestFakeVault_Delete(t *testing.T) {
+	fv := NewFakeVault()
+	ctx := context.Background()
+
+	ref, _ := fv.Store(ctx, "vault", "title", "field", "value") //nolint:errcheck
+	if err := fv.Delete(ctx, ref); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := fv.Get(ctx, ref); err == nil {
+		t.Error("expected Get to fail after Delete")
+	}
+}
+
+func TestFakeVault_Delete_Idempotent(t *testing.T) {
+	fv := NewFakeVault()
+	ctx := context.Background()
+	// Deleting a ref that was never stored should not error.
+	if err := fv.Delete(ctx, "op://vault/missing/field"); err != nil {
+		t.Errorf("Delete of non-existent ref should be idempotent, got: %v", err)
+	}
+}
+
+func TestFakeVault_DeleteErr(t *testing.T) {
+	fv := &FakeVault{DeleteErr: fmt.Errorf("delete failed")}
+	if err := fv.Delete(context.Background(), "op://v/t/l"); err == nil {
+		t.Fatal("expected delete error")
+	}
+}
+
+// --- OnePassword.Delete ---
+
+func TestOnePasswordDelete_ItemExists(t *testing.T) {
+	markerDir := t.TempDir()
+	markerPath := filepath.Join(markerDir, "deleted")
+	script := fmt.Sprintf(`#!/bin/sh
+if [ "$1" = "item" ] && [ "$2" = "get" ]; then printf '{"id":"abc123"}'; exit 0; fi
+if [ "$1" = "item" ] && [ "$2" = "delete" ]; then touch %s; exit 0; fi
+exit 0
+`, markerPath)
+	bin := filepath.Join(t.TempDir(), "op")
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake op: %v", err)
+	}
+
+	o := &OnePassword{OpPath: bin}
+	if err := o.Delete(context.Background(), "op://vault/title/label"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := os.Stat(markerPath); os.IsNotExist(err) {
+		t.Error("expected item delete to be called")
+	}
+}
+
+func TestOnePasswordDelete_ItemNotFound(t *testing.T) {
+	bin := writeFakeOp(t, "exit 1") // item get fails → item doesn't exist
+	o := &OnePassword{OpPath: bin}
+	// Should return nil (idempotent)
+	if err := o.Delete(context.Background(), "op://vault/title/label"); err != nil {
+		t.Errorf("Delete of non-existent item should return nil, got: %v", err)
+	}
+}
+
+func TestOnePasswordDelete_InvalidRef(t *testing.T) {
+	o := &OnePassword{OpPath: "/nonexistent/op"}
+	if err := o.Delete(context.Background(), "not-an-op-ref"); err == nil {
+		t.Error("expected error for invalid ref format")
+	}
+}

@@ -20,6 +20,10 @@ type Vault interface {
 	// Get returns the plaintext value for ref.
 	Get(ctx context.Context, ref string) (string, error)
 
+	// Delete removes the item identified by ref. Returns nil if the item
+	// does not exist (idempotent). Used by dry-run cleanup.
+	Delete(ctx context.Context, ref string) error
+
 	// Handles reports whether ref belongs to this vault implementation
 	// (e.g. op:// prefix for 1Password).
 	Handles(ref string) bool
