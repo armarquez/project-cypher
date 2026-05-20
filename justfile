@@ -49,6 +49,12 @@ app_name := ""
 setup CONFIG="configs/project-cypher.yaml" PEM_STORAGE="1password" OP_VAULT="Private":
     go run ./cmd/cypher setup --config {{CONFIG}} --pem-storage {{PEM_STORAGE}} --op-vault {{OP_VAULT}} {{ if app_name != "" { "--app-name " + app_name } else { "" } }}
 
+# Smoke-test vault/filesystem access without creating a GitHub App or writing .env
+# PEM_STORAGE: "1password" (default) or "file"
+# OP_VAULT: 1Password vault name (default: "Private"), used when PEM_STORAGE=1password
+setup-dry-run PEM_STORAGE="1password" OP_VAULT="Private":
+    go run ./cmd/cypher setup --dry-run --pem-storage {{PEM_STORAGE}} --op-vault {{OP_VAULT}}
+
 # Check the runtime environment (token, config, Docker, OpenHands, 1Password CLI if op:// secrets configured)
 doctor:
     go run ./cmd/cypher doctor
