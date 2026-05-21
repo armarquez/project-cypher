@@ -260,7 +260,7 @@ When architectural decisions change, `docs/architecture.md` must be updated in t
 
 ### Documentation Agent
 
-The **Documentation Agent** (`skills/documentation-agent.yaml`) is a reviewer persona that checks every PR for documentation completeness: README freshness, architecture doc updates, C4 diagram presence, skill bundle context_pack quality, and HITL decision trail. It runs at Architect tier and posts a single structured PASS / NEEDS WORK comment. The PR checklist (`.github/pull_request_template.md`) remains the manual enforcement mechanism until the agent is wired into the PR webhook flow.
+The **Documentation Agent** (`internal/agents/docreview.go`) is a reviewer persona that checks every PR for documentation completeness: README freshness, architecture doc updates, C4 diagram presence, skill bundle context_pack quality, and HITL decision trail. It runs at Architect tier and posts a single structured PASS / NEEDS WORK comment. It is wired into the `pull_request` webhook flow in `cmd/cypher/main.go` and fires automatically on opened, synchronize, and reopened events.
 
 ---
 
@@ -273,3 +273,71 @@ These must be preserved in all implementations:
 3. GitHub tokens are **scoped** to specific repos and branches; PR merge approval requires human sign-off
 4. All LLM calls from the sandbox are **intercepted and proxied** by the Control Plane (credential injection happens server-side)
 5. **HITL is not optional** — the Control Plane must enforce escalation for the defined trigger categories regardless of what the Architect LLM recommends
+
+---
+
+## Implementation Conventions
+
+These rules capture patterns that are not obvious from the code alone and have been violated in the past. When a new violation is caught in PR review, add a rule here in the same PR — don't rely on memory.
+
+### Credential reads
+
+**Always use `secrets.ResolveEnv(ctx, key)` — never bare `os.Getenv` for credentials.**
+
+`secrets.ResolveEnv` reads the environment variable and then resolves any `op://` vault reference it finds. Bare `os.Getenv` silently returns the literal string `op://vault/item/field` and passes it to the API, causing a confusing auth failure at call time rather than a clear error at startup.
+
+The known credential env vars are:
+
+| Variable | Used by |
+|---|---|
+| `ANTHROPIC_API_KEY` | Architect LLM client, gateway credential store |
+| `GEMINI_API_KEY` | Gateway credential store |
+| `OPENAI_API_KEY` | Gateway credential store |
+| `CYPHER_GH_TOKEN` / `CYPHER_GH_TOKEN_{OWNER}_{REPO}` | GitHub client in orchestrator |
+| `CYPHER_GH_APP_PRIVATE_KEY` | GitHub App auth in setup |
+| `CYPHER_GH_WEBHOOK_SECRET` | Webhook HMAC verification |
+
+If you add a new credential: use `secrets.ResolveEnv` at startup in `cmd/cypher/main.go` (not inside individual packages), add it to the table above, and add it to `knownSecretVars` in `internal/doctor/doctor.go`.
+
+`gateway.LoadCredentials()` reads env vars as plain strings — it exists for tests only. Never call it from production code. Production always goes through `loadResolvedCredentials` in `cmd/cypher/main.go`.
+
+### Active-guardrail failures
+
+**When an enforcement dependency is absent, log `Warn` — never silently skip.**
+
+If a guardrail is active (present in `cfg.Guardrails`, or all guardrails are on because the list is empty) but its enforcement agent is unavailable (e.g., `ANTHROPIC_API_KEY` not set so the Architect client is nil), log a `Warn` at startup. Do not silently skip — the human needs to know the guardrail is inactive.
+
+Hard error only when the underlying *resolution* fails (e.g., `op://` reference that cannot be resolved). Absence of a key is a configuration choice; resolution failure is an infrastructure error.
+
+### Adding a new guardrail
+
+1. Add the rule to `config.StandardGuardrails` in `internal/config/config.go`.
+2. Implement the enforcement point (HITL gate call, agent check, etc.).
+3. Add tests for the enabled and disabled cases (see `TestGuardrailEnabled_*` in `internal/orchestrator/loop_test.go` as the pattern).
+4. Update Section 6 (Guardrails) of `docs/architecture.md` in the same PR.
+5. If the guardrail depends on an Architect-tier agent, add a `Warn` log at orchestrator startup when the key is absent (see the `archClient == nil` block in `cmd/cypher/main.go`).
+
+### Adding a new LLM vendor to the gateway
+
+1. Add a `Vendor` constant to `internal/gateway/router.go`.
+2. Add the default API endpoint to the routing table in `router.go`.
+3. Add credential injection to `CredentialStore.Inject` in `internal/gateway/credentials.go`.
+4. Add the vendor's env var to `loadResolvedCredentials` in `cmd/cypher/main.go` — not to `LoadCredentials` (that function is tests-only).
+5. Add the env var to `knownSecretVars` in `internal/doctor/doctor.go` and to the credentials table above.
+
+### Testing LLM clients
+
+**Use `NewWithBase` + `httptest.NewServer`, not interface mocking.**
+
+All LLM client constructors expose a `NewWithBase(model, apiKey, baseURL string, httpClient *http.Client)` variant. In tests, spin up an `httptest.NewServer` that returns a canned response and pass its URL to `NewWithBase`. This tests the full HTTP round-trip (request shape, header injection, response parsing) without live credentials.
+
+Do not mock the HTTP transport or define an interface around the LLM client just to swap it in tests — that pattern was the root cause of past test/production divergence (mock passed, real call failed on missing headers). Real server, real HTTP.
+
+Example pattern (from `internal/agents/osseval_test.go`):
+```go
+srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+    // assert request shape, return canned JSON response
+}))
+defer srv.Close()
+client := architect.NewWithBase("claude-sonnet-4-6", "test-key", srv.URL, srv.Client())
+```
