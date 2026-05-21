@@ -16,11 +16,12 @@ import (
 // --- test doubles ---
 
 type fakeGH struct {
-	tasks    []github.Task
-	listErr  error
-	sha      string
-	shaErr   error
-	branchErr error
+	tasks       []github.Task
+	listErr     error
+	sha         string
+	shaErr      error
+	branchErr   error
+	lastHITLReq github.HITLRequest
 }
 
 func (f *fakeGH) ListOpenIssues(_ context.Context, _, _, _ string) ([]github.Task, error) {
@@ -35,7 +36,8 @@ func (f *fakeGH) CreateBranch(_ context.Context, _, _, _, _ string) error {
 func (f *fakeGH) PostComment(_ context.Context, _ string, _ string, _ int, _ string) error {
 	return nil
 }
-func (f *fakeGH) PostHITLComment(_ context.Context, _, _ string, _ int, _ github.HITLRequest) error {
+func (f *fakeGH) PostHITLComment(_ context.Context, _, _ string, _ int, req github.HITLRequest) error {
+	f.lastHITLReq = req
 	return nil
 }
 func (f *fakeGH) WaitForDecision(_ context.Context, _, _ string, _ int, _ time.Duration) (github.Decision, error) {
@@ -327,5 +329,101 @@ func TestRunOnce_ContextCancelledDuringPoll(t *testing.T) {
 	}
 	if !sess.destroyed {
 		t.Error("session must be destroyed even when context is cancelled")
+	}
+}
+
+// --- OSS evaluation enrichment ---
+
+type fakeOSSEval struct {
+	result string
+	err    error
+	called bool
+}
+
+func (f *fakeOSSEval) Run(_ context.Context, _ string) (string, error) {
+	f.called = true
+	return f.result, f.err
+}
+
+func TestRunOnce_OSSEval_EnrichesHITLComment(t *testing.T) {
+	sess := &fakeSession{}
+	gh := &fakeGH{
+		tasks: []github.Task{{IssueNumber: 10, Title: "Add dep", Body: "b"}},
+		sha:   "sha",
+	}
+	oh := &fakeOH{
+		convID: "conv-10",
+		events: [][]session.Event{
+			{{ID: 1, Source: "agent", Text: "[HITL:new-dependency] gopkg.in/yaml.v3"}},
+		},
+		statuses: []session.ConversationStatus{session.StatusFinished},
+	}
+	eval := &fakeOSSEval{result: "Well-maintained. Recommend: Adopt."}
+	orch := testOrch(gh, &fakeSessionCreator{sess: sess}, oh).WithOSSEvaluator(eval)
+
+	if err := orch.RunOnce(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !eval.called {
+		t.Error("OSS evaluator was not called for new-dependency trigger")
+	}
+	if gh.lastHITLReq.OSSEvaluation == "" {
+		t.Error("HITL request missing OSS evaluation")
+	}
+	if gh.lastHITLReq.OSSEvaluation != "Well-maintained. Recommend: Adopt." {
+		t.Errorf("OSSEvaluation = %q, want %q", gh.lastHITLReq.OSSEvaluation, "Well-maintained. Recommend: Adopt.")
+	}
+}
+
+func TestRunOnce_OSSEval_FailsGracefully(t *testing.T) {
+	sess := &fakeSession{}
+	gh := &fakeGH{
+		tasks: []github.Task{{IssueNumber: 11, Title: "Add dep", Body: "b"}},
+		sha:   "sha",
+	}
+	oh := &fakeOH{
+		convID: "conv-11",
+		events: [][]session.Event{
+			{{ID: 1, Source: "agent", Text: "[HITL:new-dependency] some-package"}},
+		},
+		statuses: []session.ConversationStatus{session.StatusFinished},
+	}
+	eval := &fakeOSSEval{err: errors.New("LLM unavailable")}
+	orch := testOrch(gh, &fakeSessionCreator{sess: sess}, oh).WithOSSEvaluator(eval)
+
+	// Should not return an error — OSS eval failure is non-fatal
+	if err := orch.RunOnce(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// HITL should still fire without the evaluation
+	if !sess.paused {
+		t.Error("session should still be paused even when OSS eval fails")
+	}
+	if gh.lastHITLReq.OSSEvaluation != "" {
+		t.Error("OSSEvaluation should be empty when eval fails")
+	}
+}
+
+func TestRunOnce_OSSEval_SkippedForNonDependencyTrigger(t *testing.T) {
+	sess := &fakeSession{}
+	gh := &fakeGH{
+		tasks: []github.Task{{IssueNumber: 12, Title: "Arch change", Body: "b"}},
+		sha:   "sha",
+	}
+	oh := &fakeOH{
+		convID: "conv-12",
+		events: [][]session.Event{
+			{{ID: 1, Source: "agent", Text: "[HITL:architectural-change] major refactor"}},
+		},
+		statuses: []session.ConversationStatus{session.StatusFinished},
+	}
+	eval := &fakeOSSEval{result: "should not be called"}
+	orch := testOrch(gh, &fakeSessionCreator{sess: sess}, oh).WithOSSEvaluator(eval)
+
+	if err := orch.RunOnce(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if eval.called {
+		t.Error("OSS evaluator should NOT be called for architectural-change trigger")
 	}
 }

@@ -92,6 +92,39 @@ func (c *Client) PostComment(ctx context.Context, owner, repo string, number int
 	return nil
 }
 
+// PRDetail holds the title and body of a pull request, used by review agents.
+type PRDetail struct {
+	Number int    `json:"number"`
+	Title  string `json:"title"`
+	Body   string `json:"body"`
+}
+
+// GetPR fetches the title and body of a pull request.
+func (c *Client) GetPR(ctx context.Context, owner, repo string, number int) (*PRDetail, error) {
+	path := fmt.Sprintf("/repos/%s/%s/pulls/%d", owner, repo, number)
+	var pr PRDetail
+	if err := c.do(ctx, path, &pr); err != nil {
+		return nil, fmt.Errorf("get PR %s/%s#%d: %w", owner, repo, number, err)
+	}
+	return &pr, nil
+}
+
+// PRFile is a file changed by a pull request.
+type PRFile struct {
+	Filename string `json:"filename"`
+	Status   string `json:"status"` // "added", "modified", "removed", "renamed"
+}
+
+// GetPRFiles returns the files changed by a pull request.
+func (c *Client) GetPRFiles(ctx context.Context, owner, repo string, number int) ([]PRFile, error) {
+	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/files", owner, repo, number)
+	var files []PRFile
+	if err := c.do(ctx, path, &files); err != nil {
+		return nil, fmt.Errorf("get files for PR %s/%s#%d: %w", owner, repo, number, err)
+	}
+	return files, nil
+}
+
 // CloseIssue closes an issue in owner/repo.
 func (c *Client) CloseIssue(ctx context.Context, owner, repo string, number int) error {
 	path := fmt.Sprintf("/repos/%s/%s/issues/%d", owner, repo, number)

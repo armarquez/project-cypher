@@ -24,10 +24,11 @@ const (
 
 // HITLRequest describes a proposed change that requires human sign-off.
 type HITLRequest struct {
-	Trigger      string // e.g. "new external dependency", "architectural change"
-	Proposed     string // what is being proposed
-	Context      string // why it is being proposed
-	Alternatives string // alternatives considered
+	Trigger       string // e.g. "new external dependency", "architectural change"
+	Proposed      string // what is being proposed
+	Context       string // why it is being proposed
+	Alternatives  string // alternatives considered
+	OSSEvaluation string // pre-populated OSS security evaluation (new-dependency triggers only)
 }
 
 func (r HITLRequest) format() string {
@@ -38,6 +39,10 @@ func (r HITLRequest) format() string {
 	fmt.Fprintf(&b, "**Context:** %s\n\n", r.Context)
 	if r.Alternatives != "" {
 		fmt.Fprintf(&b, "**Alternatives considered:** %s\n\n", r.Alternatives)
+	}
+	if r.OSSEvaluation != "" {
+		b.WriteString("### OSS Evaluation (Architect pre-assessment)\n\n")
+		fmt.Fprintf(&b, "%s\n\n", r.OSSEvaluation)
 	}
 	b.WriteString("---\n\n")
 	b.WriteString("To approve: add label `cypher:approved` or comment `/cypher approve`\n")

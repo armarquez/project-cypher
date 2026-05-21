@@ -57,17 +57,24 @@ func (a *ManagerAdapter) Create(ctx context.Context) (WorkerSession, error) {
 	return a.M.Create(ctx)
 }
 
+// ossEvaluator is called before posting a new-dependency HITL comment to
+// pre-populate the issue with an OSS security evaluation.
+type ossEvaluator interface {
+	Run(ctx context.Context, packageDetail string) (string, error)
+}
+
 // Orchestrator drives the main Cypher loop: fetches open issues, dispatches a
 // worker session per task, monitors for HITL triggers, and handles completion.
 type Orchestrator struct {
-	owner   string
-	repo    string
-	cfg     *config.Config
-	gh      ghClient
+	owner    string
+	repo     string
+	cfg      *config.Config
+	gh       ghClient
 	sessions sessionCreator
-	newOH   func() OHClient
-	pollInt time.Duration
-	log     *slog.Logger
+	newOH    func() OHClient
+	pollInt  time.Duration
+	log      *slog.Logger
+	ossEval  ossEvaluator // nil when oss_adoption:evaluate is inactive or no API key
 }
 
 // New returns an Orchestrator. All dependencies are injected, making the
@@ -94,6 +101,13 @@ func New(
 		pollInt:  pollInt,
 		log:      log,
 	}
+}
+
+// WithOSSEvaluator sets the OSS evaluator used when the oss_adoption:evaluate
+// guardrail is active. Returns the receiver for chaining.
+func (o *Orchestrator) WithOSSEvaluator(e ossEvaluator) *Orchestrator {
+	o.ossEval = e
+	return o
 }
 
 // RunOnce fetches open issues labelled "cypher" and processes the oldest one.
@@ -167,6 +181,14 @@ func (o *Orchestrator) pollUntilDone(
 					Proposed: t.Detail,
 					Context:  fmt.Sprintf("issue #%d: %s", task.IssueNumber, task.Title),
 				}
+				if t.Kind == hitl.TriggerNewDependency && o.ossEval != nil && o.ossAdoptionEnabled() {
+					eval, evalErr := o.ossEval.Run(ctx, t.Detail)
+					if evalErr != nil {
+						o.log.WarnContext(ctx, "oss eval failed — proceeding without pre-assessment", "err", evalErr)
+					} else {
+						req.OSSEvaluation = eval
+					}
+				}
 				if err := gate.Enforce(ctx, sess, req); err != nil {
 					return fmt.Errorf("hitl gate rejected: %w", err)
 				}
@@ -191,6 +213,15 @@ func (o *Orchestrator) pollUntilDone(
 		case <-time.After(o.pollInt):
 		}
 	}
+}
+
+// ossAdoptionEnabled reports whether oss_adoption:evaluate is active.
+// Mirrors the "empty list = all on" behaviour of guardrailEnabled.
+func (o *Orchestrator) ossAdoptionEnabled() bool {
+	if len(o.cfg.Guardrails) == 0 {
+		return true
+	}
+	return o.cfg.GuardrailEnabled("oss_adoption:evaluate")
 }
 
 // guardrailEnabled reports whether the guardrail rule that maps to the given

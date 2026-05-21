@@ -10,6 +10,10 @@ import (
 	"strings"
 	"time"
 
+	"encoding/json"
+
+	"github.com/armarquez/project-cypher/internal/agents"
+	"github.com/armarquez/project-cypher/internal/architect"
 	"github.com/armarquez/project-cypher/internal/config"
 	"github.com/armarquez/project-cypher/internal/doctor"
 	"github.com/armarquez/project-cypher/internal/gateway"
@@ -264,6 +268,24 @@ func runOrchestrator() {
 		log,
 	)
 
+	// Wire Architect-tier agents based on active guardrails.
+	archClient := architectClient(cfg)
+	if archClient != nil {
+		ossEnabled := len(cfg.Guardrails) == 0 || cfg.GuardrailEnabled("oss_adoption:evaluate")
+		if ossEnabled {
+			orch.WithOSSEvaluator(agents.NewOSSEvaluator(archClient))
+			log.Info("oss_adoption:evaluate active — OSS evaluator wired")
+		}
+		if webhookSrv != nil {
+			docChecks := activeDocChecks(cfg)
+			if len(docChecks) > 0 {
+				docAgent := agents.NewDocumentationAgent(archClient, ghClient)
+				webhookSrv.Register("pull_request", makePRReviewHandler(docAgent, owner, repo, docChecks, log))
+				log.Info("docs guardrails active — Documentation Agent registered for PR webhook", "checks", docChecks)
+			}
+		}
+	}
+
 	ctx := context.Background()
 	if *loop {
 		log.Info("starting orchestrator loop", "owner", owner, "repo", repo, "poll", *pollSecs)
@@ -287,4 +309,72 @@ func envOrDefault(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// architectClient returns an *architect.Client if ANTHROPIC_API_KEY is set
+// and the config specifies an anthropic/ model. Returns nil otherwise.
+func architectClient(cfg *config.Config) *architect.Client {
+	apiKey := os.Getenv("ANTHROPIC_API_KEY")
+	if apiKey == "" {
+		return nil
+	}
+	model := strings.TrimPrefix(cfg.ArchitectModel, "anthropic/")
+	return architect.New(model, apiKey, nil)
+}
+
+// activeDocChecks returns the docs:* guardrail IDs that are active in cfg.
+func activeDocChecks(cfg *config.Config) []string {
+	ids := []string{"docs:require-readme-update", "docs:require-arch-doc-update"}
+	if len(cfg.Guardrails) == 0 {
+		return ids // empty list means all guardrails active
+	}
+	var active []string
+	for _, id := range ids {
+		if cfg.GuardrailEnabled(id) {
+			active = append(active, id)
+		}
+	}
+	return active
+}
+
+// prWebhookPayload is the subset of a GitHub pull_request event we need.
+type prWebhookPayload struct {
+	Number      int    `json:"number"`
+	PullRequest struct {
+		Number int `json:"number"`
+	} `json:"pull_request"`
+}
+
+// makePRReviewHandler returns a gateway.Handler that fires the Documentation
+// Agent on opened/synchronize/reopened pull_request events.
+func makePRReviewHandler(
+	agent *agents.DocumentationAgent,
+	owner, repo string,
+	activeChecks []string,
+	log *slog.Logger,
+) gateway.Handler {
+	return func(ctx context.Context, event gateway.Event) error {
+		switch event.Action {
+		case "opened", "synchronize", "reopened":
+		default:
+			return nil // ignore closed, labeled, etc.
+		}
+		var payload prWebhookPayload
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			return fmt.Errorf("parse PR webhook payload: %w", err)
+		}
+		prNumber := payload.PullRequest.Number
+		if prNumber == 0 {
+			prNumber = payload.Number
+		}
+		if prNumber == 0 {
+			return fmt.Errorf("could not determine PR number from webhook payload")
+		}
+		log.Info("documentation agent reviewing PR", "pr", prNumber, "action", event.Action)
+		if err := agent.Run(ctx, owner, repo, prNumber, activeChecks); err != nil {
+			log.Error("documentation agent failed", "pr", prNumber, "err", err)
+			return err
+		}
+		return nil
+	}
 }
