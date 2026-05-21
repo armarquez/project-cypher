@@ -18,8 +18,11 @@ func NewCredentialStore(keys map[Vendor]string) *CredentialStore {
 	return &CredentialStore{keys: keys}
 }
 
-// LoadCredentials reads vendor API keys from environment variables.
-// Missing keys are silently skipped; Ollama requires no key.
+// LoadCredentials reads vendor API keys from environment variables using
+// bare os.Getenv — values are used as-is without op:// resolution.
+// Only use this in tests or environments where credentials are plain strings.
+// Production code in cmd/cypher uses loadResolvedCredentials (via secrets.ResolveEnv)
+// so that op:// vault references are resolved before injection.
 //
 //	GEMINI_API_KEY    — Google Generative AI
 //	ANTHROPIC_API_KEY — Anthropic
