@@ -228,7 +228,12 @@ func runOrchestrator() {
 
 	creds := gateway.LoadCredentials()
 	router := gateway.NewRouter(http.DefaultClient, nil, creds)
-	gw := gateway.NewServer(*gatewayAddr, router)
+
+	var webhookSrv *gateway.WebhookServer
+	if secret := os.Getenv("CYPHER_GH_WEBHOOK_SECRET"); secret != "" {
+		webhookSrv = gateway.NewWebhookServer(secret)
+	}
+	gw := gateway.NewServer(*gatewayAddr, router, webhookSrv)
 	go func() {
 		if err := gw.Start(); err != nil {
 			log.Error("gateway error", "err", err)

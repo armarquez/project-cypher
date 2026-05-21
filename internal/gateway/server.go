@@ -12,11 +12,14 @@ type Server struct {
 	srv *http.Server
 }
 
-// NewServer creates a gateway Server listening on addr, using router as
-// the sole handler. Call Start to begin accepting connections.
-func NewServer(addr string, router *Router) *Server {
+// NewServer creates a gateway Server listening on addr. webhook may be nil —
+// when non-nil, it is registered at POST /webhook. Call Start to accept connections.
+func NewServer(addr string, router *Router, webhook *WebhookServer) *Server {
 	mux := http.NewServeMux()
 	mux.Handle("/health", http.HandlerFunc(handleHealth))
+	if webhook != nil {
+		mux.Handle("/webhook", webhook)
+	}
 	mux.Handle("/", router)
 
 	return &Server{

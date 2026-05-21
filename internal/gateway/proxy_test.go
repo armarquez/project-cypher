@@ -183,7 +183,7 @@ func TestProxy_HopByHopHeadersStripped(t *testing.T) {
 
 func TestHealthEndpoint(t *testing.T) {
 	router := buildRouter(t, nil)
-	srv := NewServer("", router)
+	srv := NewServer("", router, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	w := httptest.NewRecorder()
