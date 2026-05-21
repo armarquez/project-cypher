@@ -37,6 +37,7 @@ var StandardGuardrails = []Guardrail{
 	{ID: "oss_adoption:evaluate", Description: "Architect reviews OSS before adoption"},
 	{ID: "docs:require-readme-update", Description: "README must be updated when project behavior changes"},
 	{ID: "docs:require-arch-doc-update", Description: "Architecture docs must reflect structural changes"},
+	{ID: "security:consistency-review", Description: "Architect reviews PRs for security invariants and pattern consistency"},
 }
 
 // Config holds the per-project configuration that tells the orchestrator
