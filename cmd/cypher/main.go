@@ -230,12 +230,24 @@ func runOrchestrator() {
 		os.Exit(1)
 	}
 
-	creds := gateway.LoadCredentials()
+	ctx := context.Background()
+
+	credKeys, err := loadResolvedCredentials(ctx)
+	if err != nil {
+		log.Error("resolve gateway credentials", "err", err)
+		os.Exit(1)
+	}
+	creds := gateway.NewCredentialStore(credKeys)
 	router := gateway.NewRouter(http.DefaultClient, nil, creds)
 
 	var webhookSrv *gateway.WebhookServer
-	if secret := os.Getenv("CYPHER_GH_WEBHOOK_SECRET"); secret != "" {
-		webhookSrv = gateway.NewWebhookServer(secret)
+	webhookSecret, err := secrets.ResolveEnv(ctx, "CYPHER_GH_WEBHOOK_SECRET")
+	if err != nil {
+		log.Error("resolve webhook secret", "err", err)
+		os.Exit(1)
+	}
+	if webhookSecret != "" {
+		webhookSrv = gateway.NewWebhookServer(webhookSecret)
 	}
 	gw := gateway.NewServer(*gatewayAddr, router, webhookSrv)
 	go func() {
@@ -269,8 +281,20 @@ func runOrchestrator() {
 	)
 
 	// Wire Architect-tier agents based on active guardrails.
-	archClient := architectClient(cfg)
-	if archClient != nil {
+	archClient, err := architectClient(ctx, cfg)
+	if err != nil {
+		log.Error("resolve architect API key", "err", err)
+		os.Exit(1)
+	}
+	if archClient == nil {
+		ossEnabled := len(cfg.Guardrails) == 0 || cfg.GuardrailEnabled("oss_adoption:evaluate")
+		if ossEnabled {
+			log.Warn("ANTHROPIC_API_KEY not set — oss_adoption:evaluate guardrail inactive")
+		}
+		if len(activeDocChecks(cfg)) > 0 {
+			log.Warn("ANTHROPIC_API_KEY not set — docs:* guardrails inactive")
+		}
+	} else {
 		ossEnabled := len(cfg.Guardrails) == 0 || cfg.GuardrailEnabled("oss_adoption:evaluate")
 		if ossEnabled {
 			orch.WithOSSEvaluator(agents.NewOSSEvaluator(archClient))
@@ -286,7 +310,6 @@ func runOrchestrator() {
 		}
 	}
 
-	ctx := context.Background()
 	if *loop {
 		log.Info("starting orchestrator loop", "owner", owner, "repo", repo, "poll", *pollSecs)
 		for {
@@ -311,15 +334,43 @@ func envOrDefault(key, def string) string {
 	return def
 }
 
-// architectClient returns an *architect.Client if ANTHROPIC_API_KEY is set
-// and the config specifies an anthropic/ model. Returns nil otherwise.
-func architectClient(cfg *config.Config) *architect.Client {
-	apiKey := os.Getenv("ANTHROPIC_API_KEY")
+// architectClient resolves ANTHROPIC_API_KEY through the secrets chain and
+// returns an *architect.Client. Returns nil (no error) when the key is absent —
+// callers are responsible for warning when active guardrails depend on it.
+func architectClient(ctx context.Context, cfg *config.Config) (*architect.Client, error) {
+	apiKey, err := secrets.ResolveEnv(ctx, "ANTHROPIC_API_KEY")
+	if err != nil {
+		return nil, fmt.Errorf("resolve ANTHROPIC_API_KEY: %w", err)
+	}
 	if apiKey == "" {
-		return nil
+		return nil, nil
 	}
 	model := strings.TrimPrefix(cfg.ArchitectModel, "anthropic/")
-	return architect.New(model, apiKey, nil)
+	return architect.New(model, apiKey, nil), nil
+}
+
+// loadResolvedCredentials reads vendor API keys from environment variables,
+// resolving any op:// references through the secrets chain.
+func loadResolvedCredentials(ctx context.Context) (map[gateway.Vendor]string, error) {
+	pairs := []struct {
+		vendor gateway.Vendor
+		envVar string
+	}{
+		{gateway.VendorGemini, "GEMINI_API_KEY"},
+		{gateway.VendorAnthropic, "ANTHROPIC_API_KEY"},
+		{gateway.VendorOpenAI, "OPENAI_API_KEY"},
+	}
+	keys := make(map[gateway.Vendor]string)
+	for _, p := range pairs {
+		v, err := secrets.ResolveEnv(ctx, p.envVar)
+		if err != nil {
+			return nil, fmt.Errorf("resolve %s: %w", p.envVar, err)
+		}
+		if v != "" {
+			keys[p.vendor] = v
+		}
+	}
+	return keys, nil
 }
 
 // activeDocChecks returns the docs:* guardrail IDs that are active in cfg.
