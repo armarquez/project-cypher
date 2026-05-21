@@ -166,3 +166,9 @@ Until #64 is implemented, the skill bundle stays as-is. **Do not remove it.**
 3. **New `internal/agents/` package** will house the custom agent types and the shared `ArchitectClient` interface. Each agent is a sub-package (`agents/docreview`, `agents/hitlclassify`, `agents/osseval`).
 
 4. **The skill bundle format is unchanged.** Bundles that describe implementation worker capabilities keep their current YAML format. The distinction is purely in how the orchestrator invokes them.
+
+---
+
+## References
+
+- [Building Agents from the Ground Up](https://ghuntley.com/agent/) — the conceptual foundation for how agents are structured in this project

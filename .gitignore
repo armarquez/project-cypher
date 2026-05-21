@@ -10,5 +10,9 @@ configs/*.yaml
 # Cypher runtime artifacts (GitHub App key, etc.)
 .cypher/
 
+# local environment / secrets
+.env
+.envrc
+
 # test coverage artifacts
 coverage.out
