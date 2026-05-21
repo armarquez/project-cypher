@@ -32,6 +32,12 @@ func New(model, apiKey string, httpClient *http.Client) *Client {
 	return newWithBase(model, apiKey, defaultBaseURL, httpClient)
 }
 
+// NewWithBase creates a Client with a custom base URL. Intended for tests only
+// (e.g. httptest.Server injection). Use New for production.
+func NewWithBase(model, apiKey, baseURL string, httpClient *http.Client) *Client {
+	return newWithBase(model, apiKey, baseURL, httpClient)
+}
+
 func newWithBase(model, apiKey, baseURL string, httpClient *http.Client) *Client {
 	if httpClient == nil {
 		httpClient = http.DefaultClient

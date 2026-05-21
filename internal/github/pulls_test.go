@@ -215,3 +215,72 @@ func TestDoMethod_SetsContentTypeForBody(t *testing.T) {
 		t.Errorf("Content-Type = %q, want application/json", gotCT)
 	}
 }
+
+// --- GetPR ---
+
+func TestGetPR_ReturnsTitleAndBody(t *testing.T) {
+	srv, _ := apiServer(t, "/repos/o/r/pulls/42", http.StatusOK, map[string]any{
+		"number": 42,
+		"title":  "feat: new feature",
+		"body":   "implements XYZ",
+	})
+	pr, err := testClient(t, srv.URL).GetPR(context.Background(), "o", "r", 42)
+	if err != nil {
+		t.Fatalf("GetPR: %v", err)
+	}
+	if pr.Number != 42 {
+		t.Errorf("number = %d, want 42", pr.Number)
+	}
+	if pr.Title != "feat: new feature" {
+		t.Errorf("title = %q, want %q", pr.Title, "feat: new feature")
+	}
+	if pr.Body != "implements XYZ" {
+		t.Errorf("body = %q, want %q", pr.Body, "implements XYZ")
+	}
+}
+
+func TestGetPR_APIError(t *testing.T) {
+	srv, _ := apiServer(t, "/repos/o/r/pulls/99", http.StatusNotFound, map[string]string{"message": "not found"})
+	_, err := testClient(t, srv.URL).GetPR(context.Background(), "o", "r", 99)
+	if err == nil {
+		t.Fatal("expected error for 404")
+	}
+}
+
+// --- GetPRFiles ---
+
+func TestGetPRFiles_ReturnsFiles(t *testing.T) {
+	srv, _ := apiServer(t, "/repos/o/r/pulls/7/files", http.StatusOK, []map[string]string{
+		{"filename": "internal/foo/bar.go", "status": "modified"},
+		{"filename": "docs/architecture.md", "status": "modified"},
+	})
+	files, err := testClient(t, srv.URL).GetPRFiles(context.Background(), "o", "r", 7)
+	if err != nil {
+		t.Fatalf("GetPRFiles: %v", err)
+	}
+	if len(files) != 2 {
+		t.Fatalf("got %d files, want 2", len(files))
+	}
+	if files[0].Filename != "internal/foo/bar.go" || files[0].Status != "modified" {
+		t.Errorf("files[0] = %+v, unexpected", files[0])
+	}
+}
+
+func TestGetPRFiles_EmptyList(t *testing.T) {
+	srv, _ := apiServer(t, "/repos/o/r/pulls/3/files", http.StatusOK, []map[string]string{})
+	files, err := testClient(t, srv.URL).GetPRFiles(context.Background(), "o", "r", 3)
+	if err != nil {
+		t.Fatalf("GetPRFiles: %v", err)
+	}
+	if len(files) != 0 {
+		t.Errorf("got %d files, want 0", len(files))
+	}
+}
+
+func TestGetPRFiles_APIError(t *testing.T) {
+	srv, _ := apiServer(t, "/repos/o/r/pulls/5/files", http.StatusForbidden, nil)
+	_, err := testClient(t, srv.URL).GetPRFiles(context.Background(), "o", "r", 5)
+	if err == nil {
+		t.Fatal("expected error for 403")
+	}
+}
