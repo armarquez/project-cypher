@@ -294,6 +294,9 @@ func runOrchestrator() {
 		if len(activeDocChecks(cfg)) > 0 {
 			log.Warn("ANTHROPIC_API_KEY not set — docs:* guardrails inactive")
 		}
+		if len(cfg.Guardrails) == 0 || cfg.GuardrailEnabled("security:consistency-review") {
+			log.Warn("ANTHROPIC_API_KEY not set — security:consistency-review guardrail inactive")
+		}
 	} else {
 		ossEnabled := len(cfg.Guardrails) == 0 || cfg.GuardrailEnabled("oss_adoption:evaluate")
 		if ossEnabled {
@@ -302,10 +305,20 @@ func runOrchestrator() {
 		}
 		if webhookSrv != nil {
 			docChecks := activeDocChecks(cfg)
+			secEnabled := len(cfg.Guardrails) == 0 || cfg.GuardrailEnabled("security:consistency-review")
+
+			var docAgent *agents.DocumentationAgent
 			if len(docChecks) > 0 {
-				docAgent := agents.NewDocumentationAgent(archClient, ghClient)
-				webhookSrv.Register("pull_request", makePRReviewHandler(docAgent, owner, repo, docChecks, log))
-				log.Info("docs guardrails active — Documentation Agent registered for PR webhook", "checks", docChecks)
+				docAgent = agents.NewDocumentationAgent(archClient, ghClient)
+				log.Info("docs guardrails active — Documentation Agent wired for PR webhook", "checks", docChecks)
+			}
+			var secAgent *agents.SecurityReviewer
+			if secEnabled {
+				secAgent = agents.NewSecurityReviewer(archClient, ghClient)
+				log.Info("security:consistency-review active — Security Reviewer wired for PR webhook")
+			}
+			if docAgent != nil || secAgent != nil {
+				webhookSrv.Register("pull_request", makePRReviewHandler(docAgent, secAgent, owner, repo, docChecks, log))
 			}
 		}
 	}
@@ -397,11 +410,13 @@ type prWebhookPayload struct {
 }
 
 // makePRReviewHandler returns a gateway.Handler that fires the Documentation
-// Agent on opened/synchronize/reopened pull_request events.
+// Agent and SecurityReviewer on opened/synchronize/reopened pull_request events.
+// Both agents run sequentially; errors from either are logged and returned.
 func makePRReviewHandler(
-	agent *agents.DocumentationAgent,
+	docAgent *agents.DocumentationAgent,
+	secAgent *agents.SecurityReviewer,
 	owner, repo string,
-	activeChecks []string,
+	activeDocChecks []string,
 	log *slog.Logger,
 ) gateway.Handler {
 	return func(ctx context.Context, event gateway.Event) error {
@@ -421,11 +436,25 @@ func makePRReviewHandler(
 		if prNumber == 0 {
 			return fmt.Errorf("could not determine PR number from webhook payload")
 		}
-		log.Info("documentation agent reviewing PR", "pr", prNumber, "action", event.Action)
-		if err := agent.Run(ctx, owner, repo, prNumber, activeChecks); err != nil {
-			log.Error("documentation agent failed", "pr", prNumber, "err", err)
-			return err
+
+		var retErr error
+
+		if docAgent != nil {
+			log.Info("documentation agent reviewing PR", "pr", prNumber, "action", event.Action)
+			if err := docAgent.Run(ctx, owner, repo, prNumber, activeDocChecks); err != nil {
+				log.Error("documentation agent failed", "pr", prNumber, "err", err)
+				retErr = err
+			}
 		}
-		return nil
+
+		if secAgent != nil {
+			log.Info("security reviewer reviewing PR", "pr", prNumber, "action", event.Action)
+			if err := secAgent.Run(ctx, owner, repo, prNumber); err != nil {
+				log.Error("security reviewer failed", "pr", prNumber, "err", err)
+				retErr = err
+			}
+		}
+
+		return retErr
 	}
 }
