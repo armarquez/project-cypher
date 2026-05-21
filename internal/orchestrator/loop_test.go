@@ -11,6 +11,7 @@ import (
 	"github.com/armarquez/project-cypher/internal/github"
 	"github.com/armarquez/project-cypher/internal/hitl"
 	"github.com/armarquez/project-cypher/internal/session"
+	"github.com/armarquez/project-cypher/internal/skills"
 )
 
 // --- test doubles ---
@@ -179,7 +180,7 @@ func TestIssueBranch(t *testing.T) {
 
 func TestBuildPrompt_ContainsRequiredFields(t *testing.T) {
 	task := github.Task{IssueNumber: 42, Title: "Fix bug", Body: "Details here"}
-	prompt := buildPrompt(task, "myorg", "myrepo", "feat/issue-42-fix-bug", testCfg())
+	prompt := buildPrompt(task, "myorg", "myrepo", "feat/issue-42-fix-bug", testCfg(), "")
 
 	for _, want := range []string{
 		"myorg/myrepo",
@@ -199,11 +200,30 @@ func TestBuildPrompt_ContainsRequiredFields(t *testing.T) {
 	}
 }
 
+func TestBuildPrompt_IncludesSkillContext(t *testing.T) {
+	task := github.Task{IssueNumber: 1, Title: "t", Body: "b"}
+	prompt := buildPrompt(task, "o", "r", "feat/issue-1-t", testCfg(), "Never force-push. Use git_status to inspect state.")
+	if !strings.Contains(prompt, "Available capabilities") {
+		t.Error("prompt missing 'Available capabilities' section header")
+	}
+	if !strings.Contains(prompt, "Never force-push") {
+		t.Error("prompt missing skill context content")
+	}
+}
+
+func TestBuildPrompt_NoSkillContext(t *testing.T) {
+	task := github.Task{IssueNumber: 1, Title: "t", Body: "b"}
+	prompt := buildPrompt(task, "o", "r", "feat/issue-1-t", testCfg(), "")
+	if strings.Contains(prompt, "Available capabilities") {
+		t.Error("prompt should not contain capabilities section when skillsContext is empty")
+	}
+}
+
 func TestBuildPrompt_NoDesignConstraints(t *testing.T) {
 	cfg := testCfg()
 	cfg.DesignConstraints = ""
 	task := github.Task{IssueNumber: 1, Title: "t", Body: "b"}
-	prompt := buildPrompt(task, "o", "r", "feat/issue-1-t", cfg)
+	prompt := buildPrompt(task, "o", "r", "feat/issue-1-t", cfg, "")
 	if strings.Contains(prompt, "Design constraints") {
 		t.Error("prompt should not contain Design constraints section when empty")
 	}
@@ -425,5 +445,39 @@ func TestRunOnce_OSSEval_SkippedForNonDependencyTrigger(t *testing.T) {
 	}
 	if eval.called {
 		t.Error("OSS evaluator should NOT be called for architectural-change trigger")
+	}
+}
+
+// --- WithBundles skill context ---
+
+func TestRunOnce_MissingSkillBundle_ReturnsError(t *testing.T) {
+	gh := &fakeGH{
+		tasks: []github.Task{{IssueNumber: 20, Title: "t", Body: "b"}},
+		sha:   "sha",
+	}
+	// Provide an empty bundle map — cfg.Skills references "git-operations" which is absent.
+	orch := testOrch(gh, &fakeSessionCreator{sess: &fakeSession{}}, &fakeOH{}).
+		WithBundles(map[string]*skills.Bundle{})
+
+	if err := orch.RunOnce(context.Background()); err == nil {
+		t.Error("expected error when a referenced skill bundle is missing from the map")
+	}
+}
+
+func TestRunOnce_NilBundles_WarnsAndProceeds(t *testing.T) {
+	sess := &fakeSession{}
+	gh := &fakeGH{
+		tasks: []github.Task{{IssueNumber: 21, Title: "t", Body: "b"}},
+		sha:   "sha",
+	}
+	oh := &fakeOH{
+		convID:   "conv-21",
+		statuses: []session.ConversationStatus{session.StatusFinished},
+	}
+	// bundles not set (nil) — should warn and proceed without skill context.
+	orch := testOrch(gh, &fakeSessionCreator{sess: sess}, oh)
+
+	if err := orch.RunOnce(context.Background()); err != nil {
+		t.Fatalf("unexpected error when bundles are nil: %v", err)
 	}
 }

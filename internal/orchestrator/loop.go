@@ -11,6 +11,7 @@ import (
 	"github.com/armarquez/project-cypher/internal/github"
 	"github.com/armarquez/project-cypher/internal/hitl"
 	"github.com/armarquez/project-cypher/internal/session"
+	"github.com/armarquez/project-cypher/internal/skills"
 )
 
 // WorkerSession is the interface for an active OpenHands container session.
@@ -74,7 +75,8 @@ type Orchestrator struct {
 	newOH    func() OHClient
 	pollInt  time.Duration
 	log      *slog.Logger
-	ossEval  ossEvaluator // nil when oss_adoption:evaluate is inactive or no API key
+	ossEval  ossEvaluator              // nil when oss_adoption:evaluate is inactive or no API key
+	bundles  map[string]*skills.Bundle // nil when skills dir was not loaded; warns at dispatch time
 }
 
 // New returns an Orchestrator. All dependencies are injected, making the
@@ -110,6 +112,13 @@ func (o *Orchestrator) WithOSSEvaluator(e ossEvaluator) *Orchestrator {
 	return o
 }
 
+// WithBundles sets the skill bundle map used to assemble worker prompts.
+// Returns the receiver for chaining.
+func (o *Orchestrator) WithBundles(bundles map[string]*skills.Bundle) *Orchestrator {
+	o.bundles = bundles
+	return o
+}
+
 // RunOnce fetches open issues labelled "cypher" and processes the oldest one.
 // In a production loop, RunOnce is called repeatedly on a timer.
 func (o *Orchestrator) RunOnce(ctx context.Context) error {
@@ -142,8 +151,13 @@ func (o *Orchestrator) runTask(ctx context.Context, task github.Task) error {
 	}
 	defer sess.Destroy(context.Background()) //nolint:errcheck
 
+	skillsContext, err := o.assembleSkillContext(ctx, task)
+	if err != nil {
+		return fmt.Errorf("assemble skill context: %w", err)
+	}
+
 	oh := o.newOH()
-	prompt := buildPrompt(task, o.owner, o.repo, branch, o.cfg)
+	prompt := buildPrompt(task, o.owner, o.repo, branch, o.cfg, skillsContext)
 	convID, err := oh.StartTask(ctx, prompt)
 	if err != nil {
 		return fmt.Errorf("start task: %w", err)
@@ -151,6 +165,20 @@ func (o *Orchestrator) runTask(ctx context.Context, task github.Task) error {
 
 	gate := hitl.NewGate(o.gh, o.owner, o.repo, task.IssueNumber, o.pollInt)
 	return o.pollUntilDone(ctx, sess, gate, oh, task, convID)
+}
+
+// assembleSkillContext builds the combined context_pack string from the skill
+// bundles listed in cfg.Skills. Returns an empty string (with a warning) when
+// bundles have not been loaded, so that test and bare runs degrade gracefully.
+func (o *Orchestrator) assembleSkillContext(ctx context.Context, task github.Task) (string, error) {
+	if o.bundles == nil {
+		if len(o.cfg.Skills) > 0 {
+			o.log.WarnContext(ctx, "skill bundles not loaded — worker prompt will lack capability context",
+				"issue", task.IssueNumber, "skills", o.cfg.Skills)
+		}
+		return "", nil
+	}
+	return skills.AssemblePrompt(o.bundles, o.cfg.Skills)
 }
 
 func (o *Orchestrator) pollUntilDone(
@@ -269,7 +297,9 @@ func issueBranch(task github.Task) string {
 
 // buildPrompt constructs the task description sent to the OpenHands worker.
 // It includes HITL marker instructions so the worker knows how to escalate.
-func buildPrompt(task github.Task, owner, repo, branch string, cfg *config.Config) string {
+// skillsContext is the assembled context_pack text from the project's skill
+// bundles; pass an empty string when no bundles are loaded.
+func buildPrompt(task github.Task, owner, repo, branch string, cfg *config.Config, skillsContext string) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "You are an AI coding assistant working on a GitHub repository.\n\n")
 	fmt.Fprintf(&sb, "Repository: %s/%s\n", owner, repo)
@@ -280,6 +310,9 @@ func buildPrompt(task github.Task, owner, repo, branch string, cfg *config.Confi
 		fmt.Fprintf(&sb, "Design constraints: %s\n\n", cfg.DesignConstraints)
 	}
 	fmt.Fprintf(&sb, "Test command: %s\n\n", cfg.TestCommand)
+	if skillsContext != "" {
+		fmt.Fprintf(&sb, "## Available capabilities\n\n%s\n\n", skillsContext)
+	}
 	type marker struct {
 		guardrailID string
 		line        string
