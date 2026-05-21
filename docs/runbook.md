@@ -8,25 +8,19 @@ using project-cypher to develop project-cypher.
 
 ## Architecture recap
 
-```
-GitHub Issues
-     │
-     ▼
-┌─────────────────────────────────────────────┐
-│  Cypher Orchestrator  (WSL2, port 8080)     │
-│  ┌──────────────────────────────────────┐   │
-│  │  Control Plane gateway               │   │
-│  │  Injects credentials server-side     │   │
-│  │  Proxies all LLM calls from workers  │   │
-│  └──────────────────────────────────────┘   │
-└─────────────────┬───────────────────────────┘
-                  │ Docker API
-                  ▼
-┌─────────────────────────────────────────────┐
-│  OpenHands  (Docker container, port 3000)   │
-│  Secretless — all LLM calls go through      │
-│  host.docker.internal:8080 (the gateway)    │
-└─────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    GH([GitHub Issues])
+    ORCH["Cypher Orchestrator<br />(WSL2, :8080)<br />sole secret-holder"]
+    OH["OpenHands<br />(Docker, :3000)<br />secretless worker"]
+    GW["Control Plane gateway<br />injects credentials<br />proxies all LLM calls"]
+    VENDOR([Gemini / Anthropic APIs])
+
+    GH -->|polls label=cypher| ORCH
+    ORCH -->|Docker API — create/pause/destroy| OH
+    ORCH --- GW
+    OH -->|OPENAI_BASE_URL=<br />host.docker.internal:8080| GW
+    GW -->|resolved API key| VENDOR
 ```
 
 The orchestrator is the **sole secret-holder**. Workers never see API keys.
@@ -48,17 +42,40 @@ Required CLI tools (install separately if missing):
 
 ---
 
-## Step 1 — Store secrets in 1Password
+## Step 1 — Create the GitHub App with `just setup`
 
-Create vault items for each credential. The vault name defaults to `Private`
-(matches the `--op-vault` flag default). Adjust if your setup uses a different vault.
+`just setup` registers a GitHub App against the target repo, installs it, and
+writes the App credentials to `.env`. It also handles 1Password storage for the
+private key PEM. Run it once per repo you want Cypher to manage.
 
 ```bash
-# GitHub token — needs: repo (read+write), issues, pull_requests, metadata:read
-op item create --category login --title "project-cypher-gh-token" \
-  --vault Private credential=<paste-token>
+just setup-dry-run   # verify vault access without creating anything
+just setup           # create the App, store PEM in 1Password, update .env
+```
 
-# Gemini API key — from https://aistudio.google.com/app/apikey (free tier works)
+`just setup` writes these to `.env`:
+
+```
+CYPHER_GH_APP_ID=<app-id>
+CYPHER_GH_APP_PRIVATE_KEY=op://Private/<item>/private key
+CYPHER_GH_INSTALLATION_ID=<installation-id>
+```
+
+**GitHub token for API calls.** The orchestrator's GitHub client uses
+`CYPHER_GH_TOKEN_*` (a PAT or installation token) for issue polling, branch
+creation, and PR comments — separate from the App credentials above. Create a
+fine-grained PAT with `Contents`, `Issues`, `Pull requests`, and `Metadata`
+permissions on the target repo, store it in 1Password, and add the reference:
+
+```bash
+op item create --category login --title "project-cypher-gh-token" \
+  --vault Private credential=<paste-pat>
+```
+
+## Step 2 — Store remaining secrets in 1Password
+
+```bash
+# Gemini API key — from Google AI Studio (free tier works)
 op item create --category login --title "project-cypher-gemini" \
   --vault Private credential=<paste-key>
 
@@ -66,26 +83,28 @@ op item create --category login --title "project-cypher-gemini" \
 op item create --category login --title "project-cypher-anthropic" \
   --vault Private credential=<paste-key>
 
-# Webhook secret — only needed if exposing the gateway via a public URL (see Step 6)
+# Webhook secret — only needed if exposing the gateway via a public URL (see Step 7)
 op item create --category login --title "project-cypher-webhook-secret" \
   --vault Private credential=$(openssl rand -hex 32)
 ```
 
 ---
 
-## Step 2 — Write `.env` with `op://` references
+## Step 3 — Write `.env` with `op://` references
 
 `.env` is gitignored and auto-loaded by `just`. It holds vault references, not
 secrets. The `secrets.ResolveEnv` call in the orchestrator resolves them at
 startup via the `op` CLI.
 
+`just setup` has already written the App credentials. Add the remaining lines:
+
 ```bash
-# .env
+# .env  (just setup already wrote CYPHER_GH_APP_* lines above this)
 CYPHER_GH_TOKEN_ARMARQUEZ_PROJECT_CYPHER=op://Private/project-cypher-gh-token/credential
 GEMINI_API_KEY=op://Private/project-cypher-gemini/credential
 ANTHROPIC_API_KEY=op://Private/project-cypher-anthropic/credential
 
-# Optional — only set if wiring the PR webhook (see Step 6)
+# Optional — only set if wiring the PR webhook (see Step 7)
 # CYPHER_GH_WEBHOOK_SECRET=op://Private/project-cypher-webhook-secret/credential
 ```
 
@@ -102,7 +121,7 @@ for iterative local development.
 
 ---
 
-## Step 3 — Pull the worker image
+## Step 4 — Pull the worker image
 
 The orchestrator creates OpenHands containers on demand via the Docker API.
 Pull the image once so the first task dispatch doesn't time out:
@@ -122,7 +141,7 @@ the `/var/run/docker.sock` socket to be available inside WSL2.
 
 ---
 
-## Step 4 — Start OpenHands
+## Step 5 — Start OpenHands
 
 OpenHands runs as a persistent service. The orchestrator calls its REST API
 at `CYPHER_OPENHANDS_URL` (default `http://localhost:3000`) to start and
@@ -158,7 +177,7 @@ curl -sf http://localhost:3000/api/options/models | head -c 100
 
 ---
 
-## Step 5 — Verify the environment
+## Step 6 — Verify the environment
 
 ```bash
 just doctor
@@ -188,7 +207,7 @@ Common failures and fixes:
 
 ---
 
-## Step 6 — Run once
+## Step 7 — Run once
 
 With all checks passing, process the oldest `cypher`-labelled issue:
 
@@ -214,7 +233,7 @@ just run-loop     # polls every 30 seconds
 
 ---
 
-## Step 7 — Webhook setup (optional, for PR review agents)
+## Step 8 — Webhook setup (optional, for PR review agents)
 
 The Documentation Agent and Security Reviewer fire on `pull_request` webhook
 events. GitHub must be able to reach `{host}:8080/webhook`. In Phase 1
