@@ -55,8 +55,15 @@ docs/                # architecture and design documentation
 
 ## Status
 
-Early development — Phase 1 ("Danger Room") underway. Sprint 1 complete:
-- Config loader (`internal/config`)
-- Skill bundle loader with vendor format conversion for Gemini, Anthropic, and OpenAI-compatible LLMs (`internal/skills`)
+Phase 1 ("Danger Room") — core orchestration loop complete and ready for
+dogfooding on this repo. Active components:
 
-Next: HTTP gateway (Control Plane), GitHub client, OpenHands session management.
+- Config and skill bundle loading
+- GitHub Issues → branch → OpenHands worker dispatch
+- Control Plane gateway (credential injection, LLM proxying)
+- HITL protocol (pause/resume on new-dependency, architectural, security triggers)
+- OSS Evaluator, Documentation Agent, Security Reviewer (Architect-tier)
+- `cypher doctor`, `cypher setup`, `cypher validate` CLI commands
+
+See [`docs/runbook.md`](docs/runbook.md) for the full operator guide to
+running the orchestrator for the first time.
