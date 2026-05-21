@@ -45,6 +45,7 @@ type Config struct {
 var knownSecretVars = []string{
 	"CYPHER_GH_TOKEN",
 	"CYPHER_GH_APP_PRIVATE_KEY",
+	"CYPHER_GH_WEBHOOK_SECRET",
 	"ANTHROPIC_API_KEY",
 	"GEMINI_API_KEY",
 }
