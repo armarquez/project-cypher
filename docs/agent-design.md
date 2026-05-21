@@ -124,36 +124,23 @@ type OSSEvalResult struct {
 
 The orchestrator dispatches to either path based on the trigger:
 
-```
-GitHub Issue opened
-        │
-        ▼
-  Is it a Cypher-labelled implementation task?
-        │
-   Yes ─┴─ No ──→ ignore
-        │
-        ▼
-  Spawn OpenHands worker with skill bundles from config
-        │
-        ▼
-  Stream worker output ──→ HITLClassifier.Run() on each chunk
-        │
-  Trigger detected? ──Yes──→ Pause session, open HITL issue
-        │
-       No
-        │
-        ▼
-  Worker creates PR
-        │
-        ▼
-  PR webhook fires ──→ DocumentationAgent.Run()
-        │
-  NeedsWork? ──Yes──→ Post review comment, request changes
-        │
-       No
-        │
-        ▼
-  Merge (if auto-merge enabled) or notify human
+```mermaid
+flowchart TD
+    A([GitHub Issue opened]) --> B{Cypher-labelled<br />implementation task?}
+    B -- No --> C([Ignore])
+    B -- Yes --> D[Spawn OpenHands worker<br />with skill bundles from config]
+    D --> E[Stream worker output]
+    E --> F[HITLClassifier.Run on each chunk]
+    F --> G{Trigger<br />detected?}
+    G -- Yes --> H[Pause session,<br />open HITL issue]
+    G -- No --> I{Worker<br />done?}
+    I -- No --> E
+    I -- Yes --> J([Worker creates PR])
+    J --> K[PR webhook fires]
+    K --> L[DocumentationAgent.Run]
+    L --> M{NeedsWork?}
+    M -- Yes --> N([Post review comment,<br />request changes])
+    M -- No --> O([Merge or notify human])
 ```
 
 For HITL escalations involving an OSS package, the orchestrator calls `OSSEvaluator.Run()` before creating the HITL issue, so the issue contains a pre-populated evaluation for the human to review rather than an empty request.
