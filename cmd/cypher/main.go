@@ -22,6 +22,7 @@ import (
 	"github.com/armarquez/project-cypher/internal/secrets"
 	"github.com/armarquez/project-cypher/internal/session"
 	"github.com/armarquez/project-cypher/internal/setup"
+	"github.com/armarquez/project-cypher/internal/skills"
 	"github.com/armarquez/project-cypher/internal/validate"
 )
 
@@ -195,6 +196,7 @@ func runValidate(args []string) {
 func runOrchestrator() {
 	var (
 		cfgPath     = flag.String("config", envOrDefault("CYPHER_CONFIG", "configs/project-cypher.yaml"), "project config YAML")
+		skillsDir   = flag.String("skills-dir", "skills", "directory containing skill bundle YAML files")
 		loop        = flag.Bool("loop", false, "run continuously (default: run once and exit)")
 		pollSecs    = flag.Int("poll", 30, "seconds between issue polls when --loop is set")
 		gatewayAddr = flag.String("gateway-addr", ":8080", "Control Plane gateway listen address")
@@ -279,6 +281,14 @@ func runOrchestrator() {
 		time.Duration(*pollSecs)*time.Second,
 		log,
 	)
+
+	bundles, err := skills.LoadDir(*skillsDir)
+	if err != nil {
+		log.Error("load skill bundles", "dir", *skillsDir, "err", err)
+		os.Exit(1)
+	}
+	orch.WithBundles(bundles)
+	log.Info("skill bundles loaded", "dir", *skillsDir, "count", len(bundles))
 
 	// Wire Architect-tier agents based on active guardrails.
 	archClient, err := architectClient(ctx, cfg)
