@@ -131,6 +131,8 @@ Reviewer bundles share the same YAML format. They differ only in their `context_
 
 The **Documentation Agent** (`skills/documentation-agent.yaml`) is the first reviewer persona. It checks every PR for: README freshness, architecture doc updates (including C4 diagrams), skill bundle context_pack completeness, and HITL decision trail. It posts a single structured comment and does not merge or block beyond documentation gaps.
 
+> **Design note:** Reviewer personas like the Documentation Agent are planned to migrate from skill bundle workers (OpenHands sessions) to **custom agents** — stateless Go types that call the Architect LLM directly. See [`docs/agent-design.md`](agent-design.md) for the full boundary definition between custom agents and skill bundle workers, and which personas belong to each pattern.
+
 ## Diagram Standards
 
 All diagrams in this project use **MermaidJS** rendered inside fenced code blocks. ASCII art is not permitted. Use `<br />` for line breaks inside Mermaid node labels — not `\n`.
