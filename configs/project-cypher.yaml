@@ -30,3 +30,5 @@ guardrails:
     description: "README must be updated when setup, commands, or project status change"
   - id: docs:require-arch-doc-update
     description: "docs/architecture.md must be updated when component structure or communication changes"
+  - id: security:consistency-review
+    description: "Architect reviews PRs for security invariants and pattern consistency"
