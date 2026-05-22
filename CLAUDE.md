@@ -293,8 +293,8 @@ The known credential env vars are:
 | `ANTHROPIC_API_KEY` | Architect LLM client, gateway credential store |
 | `GEMINI_API_KEY` | Gateway credential store |
 | `OPENAI_API_KEY` | Gateway credential store |
-| `CYPHER_GH_TOKEN` / `CYPHER_GH_TOKEN_{OWNER}_{REPO}` | GitHub client in orchestrator |
-| `CYPHER_GH_APP_PRIVATE_KEY` | GitHub App auth in setup |
+| `CYPHER_GH_APP_PRIVATE_KEY` | GitHub App auth — primary GitHub client in orchestrator |
+| `CYPHER_GH_TOKEN` / `CYPHER_GH_TOKEN_{OWNER}_{REPO}` | GitHub client fallback (PAT — local testing without a registered App) |
 | `CYPHER_GH_WEBHOOK_SECRET` | Webhook HMAC verification |
 
 If you add a new credential: use `secrets.ResolveEnv` at startup in `cmd/cypher/main.go` (not inside individual packages), add it to the table above, and add it to `knownSecretVars` in `internal/doctor/doctor.go`.

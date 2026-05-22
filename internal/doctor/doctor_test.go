@@ -2,12 +2,18 @@ package doctor
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/armarquez/project-cypher/internal/secrets"
 )
@@ -378,5 +384,91 @@ func TestCheckPEMFile_Set(t *testing.T) {
 	}
 	if results[0].Fix == "" {
 		t.Error("expected migration hint in Fix")
+	}
+}
+
+// --- CheckAppCredentials ---
+
+func generateDocTestPEM(t *testing.T) []byte {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate RSA key: %v", err)
+	}
+	return pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(key),
+	})
+}
+
+// appCredSrv starts a server that handles both the installation token exchange
+// and an arbitrary subsequent API call (e.g. /rate_limit).
+func appCredSrv(t *testing.T, tokenStatus, pingStatus int) *httptest.Server {
+	t.Helper()
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "access_tokens") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(tokenStatus)
+			if tokenStatus == http.StatusCreated {
+				exp := time.Now().Add(time.Hour).Format(time.RFC3339)
+				fmt.Fprintf(w, `{"token":"ghs_test","expires_at":%q}`, exp) //nolint:errcheck
+			}
+			return
+		}
+		w.WriteHeader(pingStatus)
+	}))
+	t.Cleanup(s.Close)
+	return s
+}
+
+func TestCheckAppCredentials_MissingAppID(t *testing.T) {
+	results := CheckAppCredentials(context.Background(), nil, "", "", "7", "pem")
+	if pass(results, "CYPHER_GH_APP_ID set") {
+		t.Error("expected fail when app ID is empty")
+	}
+}
+
+func TestCheckAppCredentials_MissingInstallID(t *testing.T) {
+	results := CheckAppCredentials(context.Background(), nil, "", "42", "", "pem")
+	if pass(results, "CYPHER_GH_INSTALLATION_ID set") {
+		t.Error("expected fail when installation ID is empty")
+	}
+}
+
+func TestCheckAppCredentials_MissingPEM(t *testing.T) {
+	results := CheckAppCredentials(context.Background(), nil, "", "42", "7", "")
+	if pass(results, "CYPHER_GH_APP_PRIVATE_KEY set") {
+		t.Error("expected fail when PEM is empty")
+	}
+}
+
+func TestCheckAppCredentials_InvalidPEM(t *testing.T) {
+	results := CheckAppCredentials(context.Background(), nil, "http://unused", "42", "7", "not-a-pem")
+	if pass(results, "GitHub App credentials valid") {
+		t.Error("expected fail for invalid PEM")
+	}
+}
+
+func TestCheckAppCredentials_APIError(t *testing.T) {
+	pemData := generateDocTestPEM(t)
+	s := appCredSrv(t, http.StatusUnauthorized, http.StatusOK)
+	results := CheckAppCredentials(context.Background(), s.Client(), s.URL, "42", "7", string(pemData))
+	if pass(results, "GitHub App credentials valid") {
+		t.Error("expected fail when token exchange returns 401")
+	}
+}
+
+func TestCheckAppCredentials_Success(t *testing.T) {
+	pemData := generateDocTestPEM(t)
+	s := appCredSrv(t, http.StatusCreated, http.StatusOK)
+	results := CheckAppCredentials(context.Background(), s.Client(), s.URL, "42", "7", string(pemData))
+	if !pass(results, "GitHub App credentials valid") {
+		t.Errorf("expected pass, got %+v", results)
+	}
+	if !pass(results, "CYPHER_GH_APP_ID set") {
+		t.Error("expected CYPHER_GH_APP_ID set to pass")
+	}
+	if !pass(results, "CYPHER_GH_INSTALLATION_ID set") {
+		t.Error("expected CYPHER_GH_INSTALLATION_ID set to pass")
 	}
 }

@@ -255,3 +255,21 @@ func TestInstallationTransport_InjectsTokenHeader(t *testing.T) {
 	}
 }
 
+// --- Ping ---
+
+func TestClient_Ping_Success(t *testing.T) {
+	srv, _ := captureRequest(t, http.StatusOK, nil)
+	c := NewClient("test-token", srv.Client(), srv.URL)
+	if err := c.Ping(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestClient_Ping_Unauthorized(t *testing.T) {
+	srv, _ := captureRequest(t, http.StatusUnauthorized, map[string]string{"message": "Bad credentials"})
+	c := NewClient("bad-token", srv.Client(), srv.URL)
+	if err := c.Ping(context.Background()); err == nil {
+		t.Fatal("expected error for 401 response")
+	}
+}
+
