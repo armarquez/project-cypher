@@ -61,16 +61,8 @@ CYPHER_GH_APP_PRIVATE_KEY=op://Private/<item>/private key
 CYPHER_GH_INSTALLATION_ID=<installation-id>
 ```
 
-**GitHub token for API calls.** The orchestrator's GitHub client uses
-`CYPHER_GH_TOKEN_*` (a PAT or installation token) for issue polling, branch
-creation, and PR comments — separate from the App credentials above. Create a
-fine-grained PAT with `Contents`, `Issues`, `Pull requests`, and `Metadata`
-permissions on the target repo, store it in 1Password, and add the reference:
-
-```bash
-op item create --category login --title "project-cypher-gh-token" \
-  --vault Private credential=<paste-pat>
-```
+These three credentials are sufficient. The orchestrator uses them to generate
+short-lived installation access tokens automatically — no separate PAT is needed.
 
 ## Step 2 — Store remaining secrets in 1Password
 
@@ -100,7 +92,6 @@ startup via the `op` CLI.
 
 ```bash
 # .env  (just setup already wrote CYPHER_GH_APP_* lines above this)
-CYPHER_GH_TOKEN_ARMARQUEZ_PROJECT_CYPHER=op://Private/project-cypher-gh-token/credential
 GEMINI_API_KEY=op://Private/project-cypher-gemini/credential
 ANTHROPIC_API_KEY=op://Private/project-cypher-anthropic/credential
 
@@ -186,9 +177,9 @@ just doctor
 All checks must pass before proceeding. Expected output:
 
 ```
-  ✓ CYPHER_GH_TOKEN_ARMARQUEZ_PROJECT_CYPHER set
-  ✓ GitHub token valid
-  ✓ GitHub token scopes
+  ✓ CYPHER_GH_APP_ID set
+  ✓ CYPHER_GH_INSTALLATION_ID set
+  ✓ GitHub App credentials valid
   ✓ config file readable
   ✓ config file valid
   ✓ Docker socket reachable
@@ -200,7 +191,8 @@ Common failures and fixes:
 
 | Failure | Fix |
 |---|---|
-| `CYPHER_GH_TOKEN_* set` | Confirm `.env` has the right key name; run `op signin` |
+| `CYPHER_GH_APP_ID set` | Run `just setup`; confirm `.env` has the App ID line |
+| `GitHub App credentials valid` | Run `op signin`; verify `CYPHER_GH_APP_PRIVATE_KEY` resolves correctly |
 | `Docker socket reachable` | Start Docker Desktop; confirm WSL2 integration is enabled |
 | `worker image available` | Run `docker pull ghcr.io/all-hands-ai/openhands:main` |
 | `OpenHands endpoint responding` | Start the OpenHands container (Step 4) |
@@ -268,7 +260,9 @@ PR review agents just don't fire automatically.
 
 | Variable | Required | Description |
 |---|---|---|
-| `CYPHER_GH_TOKEN_ARMARQUEZ_PROJECT_CYPHER` | Yes | GitHub token for the project-cypher repo |
+| `CYPHER_GH_APP_ID` | Yes | GitHub App ID — written by `just setup` |
+| `CYPHER_GH_APP_PRIVATE_KEY` | Yes | `op://` reference to App private key PEM — written by `just setup` |
+| `CYPHER_GH_INSTALLATION_ID` | Yes | GitHub App installation ID — written by `just setup` |
 | `GEMINI_API_KEY` | Yes | Worker LLM API key (proxied through gateway) |
 | `ANTHROPIC_API_KEY` | No | Architect LLM key — OSS eval, doc review, security review inactive without it |
 | `CYPHER_GH_WEBHOOK_SECRET` | No | HMAC secret for webhook delivery verification |

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -217,22 +218,13 @@ func runOrchestrator() {
 		os.Exit(1)
 	}
 
-	rawToken, tokenVar, _ := config.ResolveGHToken(owner, repo)
-	if rawToken == "" {
-		log.Error("GitHub token not set",
-			"tried", tokenVar,
-			"fallback", "CYPHER_GH_TOKEN",
-			"hint", "set "+tokenVar+" in your .env file",
-		)
-		os.Exit(1)
-	}
-	token, err := secrets.Resolve(context.Background(), rawToken)
-	if err != nil {
-		log.Error("resolve GitHub token", "var", tokenVar, "err", err)
-		os.Exit(1)
-	}
-
 	ctx := context.Background()
+
+	ghClient, err := buildGHClient(ctx, owner, repo, log)
+	if err != nil {
+		log.Error("build GitHub client", "err", err)
+		os.Exit(1)
+	}
 
 	credKeys, err := loadResolvedCredentials(ctx)
 	if err != nil {
@@ -258,7 +250,6 @@ func runOrchestrator() {
 		}
 	}()
 
-	ghClient := github.NewClient(token, http.DefaultClient, "")
 
 	ohURL := envOrDefault("CYPHER_OPENHANDS_URL", "http://localhost:3000")
 	socketPath := envOrDefault("CYPHER_DOCKER_SOCKET", "/var/run/docker.sock")
@@ -355,6 +346,44 @@ func envOrDefault(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// buildGHClient constructs the GitHub client used by the orchestrator.
+// It prefers App-based auth (CYPHER_GH_APP_ID + CYPHER_GH_INSTALLATION_ID +
+// CYPHER_GH_APP_PRIVATE_KEY) and falls back to a PAT (CYPHER_GH_TOKEN_*) when
+// any App credential is absent — useful for local testing without a registered App.
+func buildGHClient(ctx context.Context, owner, repo string, log *slog.Logger) (*github.Client, error) {
+	appIDStr := os.Getenv("CYPHER_GH_APP_ID")
+	installIDStr := os.Getenv("CYPHER_GH_INSTALLATION_ID")
+	pemRaw, err := secrets.ResolveEnv(ctx, "CYPHER_GH_APP_PRIVATE_KEY")
+	if err != nil {
+		return nil, fmt.Errorf("resolve CYPHER_GH_APP_PRIVATE_KEY: %w", err)
+	}
+
+	if appIDStr != "" && installIDStr != "" && pemRaw != "" {
+		appID, err := strconv.ParseInt(appIDStr, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("parse CYPHER_GH_APP_ID: %w", err)
+		}
+		installID, err := strconv.ParseInt(installIDStr, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("parse CYPHER_GH_INSTALLATION_ID: %w", err)
+		}
+		log.Info("authenticating as GitHub App", "app_id", appID, "installation_id", installID)
+		return github.NewClientFromApp(appID, installID, []byte(pemRaw), http.DefaultClient, "")
+	}
+
+	// Fall back to PAT (CYPHER_GH_TOKEN_{OWNER}_{REPO} or CYPHER_GH_TOKEN).
+	rawToken, tokenVar, _ := config.ResolveGHToken(owner, repo)
+	if rawToken == "" {
+		return nil, fmt.Errorf("no GitHub credentials found — set CYPHER_GH_APP_ID/CYPHER_GH_INSTALLATION_ID/CYPHER_GH_APP_PRIVATE_KEY (via just setup) or %s in your .env file", tokenVar)
+	}
+	token, err := secrets.Resolve(ctx, rawToken)
+	if err != nil {
+		return nil, fmt.Errorf("resolve %s: %w", tokenVar, err)
+	}
+	log.Warn("authenticating with PAT — consider running just setup to use GitHub App auth", "var", tokenVar)
+	return github.NewClient(token, http.DefaultClient, ""), nil
 }
 
 // architectClient resolves ANTHROPIC_API_KEY through the secrets chain and

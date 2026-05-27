@@ -8,10 +8,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/armarquez/project-cypher/internal/config"
+	"github.com/armarquez/project-cypher/internal/github"
 	"github.com/armarquez/project-cypher/internal/secrets"
 	"github.com/armarquez/project-cypher/internal/validate"
 )
@@ -54,11 +56,25 @@ var knownSecretVars = []string{
 func Run(ctx context.Context, cfg Config) []Result {
 	var results []Result
 
-	token, varName, deprecated := config.ResolveGHToken(cfg.Owner, cfg.Repo)
-	results = append(results, CheckTokenSet(token, varName, deprecated))
+	appIDStr := os.Getenv("CYPHER_GH_APP_ID")
+	installIDStr := os.Getenv("CYPHER_GH_INSTALLATION_ID")
+	pemRaw, _ := secrets.ResolveEnv(ctx, "CYPHER_GH_APP_PRIVATE_KEY")
 
-	ghClient := &http.Client{Timeout: 10 * time.Second}
-	results = append(results, CheckGitHub(ctx, ghClient, "https://api.github.com", token, varName)...)
+	httpClient := &http.Client{Timeout: 10 * time.Second}
+	secretVars := append([]string(nil), knownSecretVars...)
+
+	if appIDStr != "" || installIDStr != "" || pemRaw != "" {
+		// App credentials present — validate them.
+		results = append(results, CheckAppCredentials(ctx, httpClient, "https://api.github.com", appIDStr, installIDStr, pemRaw)...)
+	} else {
+		// Fall back to PAT.
+		token, varName, deprecated := config.ResolveGHToken(cfg.Owner, cfg.Repo)
+		results = append(results, CheckTokenSet(token, varName, deprecated))
+		results = append(results, CheckGitHub(ctx, httpClient, "https://api.github.com", token, varName)...)
+		if varName != "CYPHER_GH_TOKEN" {
+			secretVars = append(secretVars, varName)
+		}
+	}
 
 	results = append(results, CheckConfig(cfg.ConfigPath, cfg.SkillsDir)...)
 
@@ -68,11 +84,6 @@ func Run(ctx context.Context, cfg Config) []Result {
 	ohClient := &http.Client{Timeout: 10 * time.Second}
 	results = append(results, CheckOpenHands(ctx, ohClient, cfg.OpenHandsURL))
 
-	// Build the full set of secret vars to scan, including the per-repo token var.
-	secretVars := append([]string(nil), knownSecretVars...)
-	if varName != "CYPHER_GH_TOKEN" {
-		secretVars = append(secretVars, varName)
-	}
 	v := cfg.Vault
 	if v == nil {
 		v = &secrets.OnePassword{} // auto-detects op/op.exe from PATH
@@ -82,6 +93,47 @@ func Run(ctx context.Context, cfg Config) []Result {
 	results = append(results, CheckPEMFile()...)
 
 	return results
+}
+
+// CheckAppCredentials validates the three GitHub App credential env vars and
+// confirms the client can authenticate against the GitHub API.
+func CheckAppCredentials(ctx context.Context, httpClient *http.Client, apiBase, appIDStr, installIDStr, pemRaw string) []Result {
+	if appIDStr == "" {
+		return []Result{{Name: "CYPHER_GH_APP_ID set", Pass: false, Fix: "set CYPHER_GH_APP_ID in your .env file — run `just setup` to create the GitHub App"}}
+	}
+	if installIDStr == "" {
+		return []Result{{Name: "CYPHER_GH_INSTALLATION_ID set", Pass: false, Fix: "set CYPHER_GH_INSTALLATION_ID in your .env file — run `just setup` to create the GitHub App"}}
+	}
+	if pemRaw == "" {
+		return []Result{{Name: "CYPHER_GH_APP_PRIVATE_KEY set", Pass: false, Fix: "set CYPHER_GH_APP_PRIVATE_KEY to an op:// reference — run `just setup` to create and store the key"}}
+	}
+
+	appID, err := strconv.ParseInt(appIDStr, 10, 64)
+	if err != nil {
+		return []Result{{Name: "CYPHER_GH_APP_ID set", Pass: false, Fix: fmt.Sprintf("CYPHER_GH_APP_ID must be a number, got %q", appIDStr)}}
+	}
+	installID, err := strconv.ParseInt(installIDStr, 10, 64)
+	if err != nil {
+		return []Result{{Name: "CYPHER_GH_INSTALLATION_ID set", Pass: false, Fix: fmt.Sprintf("CYPHER_GH_INSTALLATION_ID must be a number, got %q", installIDStr)}}
+	}
+
+	client, err := github.NewClientFromApp(appID, installID, []byte(pemRaw), httpClient, apiBase)
+	if err != nil {
+		return []Result{{Name: "GitHub App credentials valid", Pass: false, Fix: fmt.Sprintf("invalid App private key: %v", err)}}
+	}
+
+	if err := client.Ping(ctx); err != nil {
+		return []Result{
+			{Name: "GitHub App credentials valid", Pass: false,
+				Fix: fmt.Sprintf("App installation token exchange failed: %v — verify CYPHER_GH_APP_ID, CYPHER_GH_INSTALLATION_ID, and the private key are correct", err)},
+		}
+	}
+
+	return []Result{
+		{Name: "CYPHER_GH_APP_ID set", Pass: true},
+		{Name: "CYPHER_GH_INSTALLATION_ID set", Pass: true},
+		{Name: "GitHub App credentials valid", Pass: true, Detail: fmt.Sprintf("app_id=%d installation_id=%d", appID, installID)},
+	}
 }
 
 func newUnixClient(socketPath string) *http.Client {

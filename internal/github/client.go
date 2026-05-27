@@ -31,6 +31,12 @@ func NewClient(token string, httpClient *http.Client, baseURL string) *Client {
 	}
 }
 
+// Ping validates the client's credentials by calling GET /rate_limit.
+// Returns nil on success; works for both PAT and App installation tokens.
+func (c *Client) Ping(ctx context.Context) error {
+	return c.do(ctx, "/rate_limit", nil)
+}
+
 // do executes an authenticated GET request and decodes the JSON response into dst.
 func (c *Client) do(ctx context.Context, path string, dst any) error {
 	return c.doMethod(ctx, http.MethodGet, path, nil, dst)
