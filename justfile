@@ -55,7 +55,11 @@ setup CONFIG="configs/project-cypher.yaml" PEM_STORAGE="1password" OP_VAULT="Pri
 setup-dry-run PEM_STORAGE="1password" OP_VAULT="Private":
     go run ./cmd/cypher setup --dry-run --pem-storage {{PEM_STORAGE}} --op-vault {{OP_VAULT}}
 
-# Check the runtime environment (token, config, Docker, OpenHands, 1Password CLI if op:// secrets configured)
+# Pull the OpenHands worker image (required before first run)
+pull:
+    docker pull ghcr.io/all-hands-ai/openhands:main
+
+# Check prerequisites: GitHub credentials, config, Docker, and 1Password CLI if op:// secrets are configured
 doctor:
     go run ./cmd/cypher doctor
 
