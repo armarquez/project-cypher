@@ -785,10 +785,10 @@ func resolvePEMStorage(ctx context.Context, cfg Config, creds *AppCredentials, c
 	var pemRef string
 	storeInOP := func() error {
 		v := cfg.opVault()
-		title := "cypher-" + creds.Slug + "-key"
+		title := creds.Slug + "-key"
 		fmt.Fprintf(out, "  Storing in 1Password vault %q...\n", v)
 		var err error
-		pemRef, err = cfg.vault().Store(ctx, v, title, "private key", creds.PEM)
+		pemRef, err = cfg.vault().Store(ctx, v, title, "credential", creds.PEM)
 		if err != nil {
 			return fmt.Errorf("store PEM in 1Password: %w", err)
 		}

@@ -40,22 +40,30 @@ coverage:
     go test -coverprofile=coverage.out ./internal/...
     go tool cover -func=coverage.out
 
-# Provision a GitHub App and write credentials to .env (interactive — opens browser)
-# PEM_STORAGE: "1password" (default) or "file" — controls where the App private key is stored
-# OP_VAULT: 1Password vault name (default: "Private"), used when PEM_STORAGE=1password
-# To override the app name when "cypher-{owner}-{repo}" is still reserved by GitHub:
-#   just app_name="cypher-owner-repo-2" setup
 app_name := ""
+
+# PEM_STORAGE: "1password" (default) or "file"; OP_VAULT: vault name (default: "Private")
+# To use a custom app name: just app_name="cypher-owner-repo-2" setup
+# Bootstrap a new environment: provision GitHub App credentials and pull the worker image
 setup CONFIG="configs/project-cypher.yaml" PEM_STORAGE="1password" OP_VAULT="Private":
+    just provision CONFIG={{CONFIG}} PEM_STORAGE={{PEM_STORAGE}} OP_VAULT={{OP_VAULT}}
+    just pull
+
+# PEM_STORAGE: "1password" (default) or "file"; OP_VAULT: vault name (default: "Private")
+# To use a custom app name: just app_name="cypher-owner-repo-2" provision
+# Provision a GitHub App and write credentials to .env (interactive — opens browser)
+provision CONFIG="configs/project-cypher.yaml" PEM_STORAGE="1password" OP_VAULT="Private":
     go run ./cmd/cypher setup --config {{CONFIG}} --pem-storage {{PEM_STORAGE}} --op-vault {{OP_VAULT}} {{ if app_name != "" { "--app-name " + app_name } else { "" } }}
 
 # Smoke-test vault/filesystem access without creating a GitHub App or writing .env
-# PEM_STORAGE: "1password" (default) or "file"
-# OP_VAULT: 1Password vault name (default: "Private"), used when PEM_STORAGE=1password
-setup-dry-run PEM_STORAGE="1password" OP_VAULT="Private":
+provision-dry-run PEM_STORAGE="1password" OP_VAULT="Private":
     go run ./cmd/cypher setup --dry-run --pem-storage {{PEM_STORAGE}} --op-vault {{OP_VAULT}}
 
-# Check the runtime environment (token, config, Docker, OpenHands, 1Password CLI if op:// secrets configured)
+# Pull the OpenHands worker image
+pull:
+    docker pull ghcr.io/all-hands-ai/openhands:main
+
+# Check prerequisites: GitHub credentials, config, Docker, and 1Password CLI if op:// secrets are configured
 doctor:
     go run ./cmd/cypher doctor
 

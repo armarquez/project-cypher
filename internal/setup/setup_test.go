@@ -180,7 +180,7 @@ func TestWriteCredentials_OPURIMode(t *testing.T) {
 	dir := t.TempDir()
 	envPath := filepath.Join(dir, ".env")
 	cypherDir := filepath.Join(dir, ".cypher")
-	opURI := "op://Private/cypher-testorg-testrepo-key/private key"
+	opURI := "op://Private/cypher-testorg-testrepo-key/credential"
 
 	creds := &AppCredentials{
 		AppID: 42,
@@ -554,8 +554,11 @@ func TestRun_EndToEnd_1Password(t *testing.T) {
 		t.Fatalf("read .env: %v", err)
 	}
 	env := string(envData)
-	if !strings.Contains(env, "CYPHER_GH_APP_PRIVATE_KEY=op://") {
-		t.Errorf(".env missing op:// key, got:\n%s", env)
+	// The item title must be "<slug>-key", not "cypher-<slug>-key" — slug already contains "cypher-".
+	// The field label must be "credential" (no space) so the op:// URI is parseable by just's dotenv.
+	wantKeyURI := "op://TestVault/cypher-testorg-testrepo-key/credential"
+	if !strings.Contains(env, "CYPHER_GH_APP_PRIVATE_KEY="+wantKeyURI) {
+		t.Errorf(".env CYPHER_GH_APP_PRIVATE_KEY: want %q, got:\n%s", wantKeyURI, env)
 	}
 	if strings.Contains(env, "CYPHER_GH_APP_PRIVATE_KEY_FILE=") {
 		t.Errorf("1password mode must not write CYPHER_GH_APP_PRIVATE_KEY_FILE:\n%s", env)

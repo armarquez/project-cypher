@@ -81,9 +81,6 @@ func Run(ctx context.Context, cfg Config) []Result {
 	dockerClient := newUnixClient(cfg.DockerSocket)
 	results = append(results, CheckDocker(ctx, dockerClient, "http://docker", cfg.WorkerImage)...)
 
-	ohClient := &http.Client{Timeout: 10 * time.Second}
-	results = append(results, CheckOpenHands(ctx, ohClient, cfg.OpenHandsURL))
-
 	v := cfg.Vault
 	if v == nil {
 		v = &secrets.OnePassword{} // auto-detects op/op.exe from PATH
@@ -362,7 +359,8 @@ func CheckSecrets(ctx context.Context, envVars []string, v secrets.Vault) []Resu
 	results = append(results, Result{Name: "1Password CLI ready", Pass: true})
 
 	for _, ref := range refs {
-		tctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		// op.exe on WSL2 incurs Windows interop overhead (~14s observed); use a generous timeout.
+		tctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		_, err := v.Get(tctx, ref.uri)
 		cancel()
 		name := ref.key + " accessible via op"
