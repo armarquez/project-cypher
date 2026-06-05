@@ -260,7 +260,7 @@ func CheckConfig(cfgPath, skillsDir string) []Result {
 
 // CheckDocker verifies the Docker socket is reachable and the worker image exists locally.
 func CheckDocker(ctx context.Context, client *http.Client, apiBase, image string) []Result {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiBase+"/v1.41/info", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiBase+"/info", nil)
 	if err != nil {
 		return errorPair("Docker socket reachable", "worker image available",
 			fmt.Sprintf("build request: %v", err))
@@ -281,7 +281,7 @@ func CheckDocker(ctx context.Context, client *http.Client, apiBase, image string
 }
 
 func checkDockerImage(ctx context.Context, client *http.Client, apiBase, image string) Result {
-	path := apiBase + "/v1.41/images/" + url.PathEscape(image) + "/json"
+	path := apiBase + "/images/" + url.PathEscape(image) + "/json"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return Result{Name: "worker image available", Pass: false, Fix: fmt.Sprintf("run: docker pull %s", image)}
