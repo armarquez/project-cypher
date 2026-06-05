@@ -206,7 +206,7 @@ skills: [missing-bundle]
 func dockerSrv(t *testing.T, imageStatus int) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/v1.41/info" {
+		if r.URL.Path == "/info" {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
