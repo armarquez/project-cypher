@@ -300,8 +300,8 @@ func TestCheckClockSkew_Skewed(t *testing.T) {
 	if r.Pass {
 		t.Error("expected fail for skewed clock")
 	}
-	if !strings.Contains(r.Fix, "hwclock") {
-		t.Errorf("expected hwclock hint in fix, got: %s", r.Fix)
+	if !strings.Contains(r.Fix, "sync-clock") {
+		t.Errorf("expected sync-clock hint in fix, got: %s", r.Fix)
 	}
 }
 

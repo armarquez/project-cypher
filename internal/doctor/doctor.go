@@ -123,7 +123,7 @@ func CheckClockSkew(ctx context.Context, client *http.Client, apiBase string) Re
 		return Result{
 			Name: "system clock in sync",
 			Pass: false,
-			Fix:  fmt.Sprintf("clock is %.0f seconds off from GitHub — GitHub App JWTs will be rejected; run: sudo hwclock --hctosys", skew.Seconds()),
+			Fix:  fmt.Sprintf("clock is %.0f seconds off from GitHub — GitHub App JWTs will be rejected; run: just sync-clock", skew.Seconds()),
 		}
 	}
 	return Result{Name: "system clock in sync", Pass: true, Detail: fmt.Sprintf("skew %.1fs", skew.Seconds())}

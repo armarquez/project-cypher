@@ -42,9 +42,9 @@ coverage:
 
 app_name := ""
 
-# Sync the WSL2 system clock with the hardware clock (required after host sleep/wake)
+# Sync the WSL2 system clock from GitHub's server time (fixes JWT auth after host sleep/wake)
 sync-clock:
-    sudo hwclock --hctosys
+    sudo date -s "$(curl -sI https://api.github.com | grep -i '^date:' | cut -d' ' -f2-)"
 
 # PEM_STORAGE: "1password" (default) or "file"; OP_VAULT: vault name (default: "Private")
 # To use a custom app name: just app_name="cypher-owner-repo-2" setup
