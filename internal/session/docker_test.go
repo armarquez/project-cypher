@@ -68,7 +68,7 @@ func (ds *dockerServer) replyNoContent() http.HandlerFunc {
 
 func TestCreateContainer_ReturnsID(t *testing.T) {
 	ds := newDockerServer(t)
-	ds.on("POST", "/v1.41/containers/create",
+	ds.on("POST", "/containers/create",
 		ds.replyJSON(http.StatusCreated, map[string]string{"Id": "abc123", "Warnings": ""}))
 
 	id, err := testDockerClient(t, ds.srv.URL).createContainer(context.Background(), ContainerConfig{
@@ -86,7 +86,7 @@ func TestCreateContainer_ReturnsID(t *testing.T) {
 func TestCreateContainer_SendsCorrectBody(t *testing.T) {
 	var gotBody map[string]any
 	ds := newDockerServer(t)
-	ds.on("POST", "/v1.41/containers/create", func(w http.ResponseWriter, r *http.Request) {
+	ds.on("POST", "/containers/create", func(w http.ResponseWriter, r *http.Request) {
 		json.NewDecoder(r.Body).Decode(&gotBody) //nolint:errcheck
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
@@ -112,7 +112,7 @@ func TestCreateContainer_SendsCorrectBody(t *testing.T) {
 
 func TestCreateContainer_EmptyIDError(t *testing.T) {
 	ds := newDockerServer(t)
-	ds.on("POST", "/v1.41/containers/create",
+	ds.on("POST", "/containers/create",
 		ds.replyJSON(http.StatusCreated, map[string]string{"Id": ""}))
 
 	_, err := testDockerClient(t, ds.srv.URL).createContainer(context.Background(), ContainerConfig{Image: "img"})
@@ -123,7 +123,7 @@ func TestCreateContainer_EmptyIDError(t *testing.T) {
 
 func TestCreateContainer_APIError(t *testing.T) {
 	ds := newDockerServer(t)
-	ds.on("POST", "/v1.41/containers/create",
+	ds.on("POST", "/containers/create",
 		ds.replyJSON(http.StatusNotFound, map[string]string{"message": "No such image"}))
 
 	_, err := testDockerClient(t, ds.srv.URL).createContainer(context.Background(), ContainerConfig{Image: "bad"})
@@ -139,7 +139,7 @@ func TestCreateContainer_APIError(t *testing.T) {
 
 func TestStartContainer_Success(t *testing.T) {
 	ds := newDockerServer(t)
-	ds.on("POST", "/v1.41/containers/abc/start", ds.replyNoContent())
+	ds.on("POST", "/containers/abc/start", ds.replyNoContent())
 
 	err := testDockerClient(t, ds.srv.URL).startContainer(context.Background(), "abc")
 	if err != nil {
@@ -149,7 +149,7 @@ func TestStartContainer_Success(t *testing.T) {
 
 func TestStartContainer_APIError(t *testing.T) {
 	ds := newDockerServer(t)
-	ds.on("POST", "/v1.41/containers/abc/start",
+	ds.on("POST", "/containers/abc/start",
 		ds.replyJSON(http.StatusNotFound, map[string]string{"message": "No such container"}))
 
 	err := testDockerClient(t, ds.srv.URL).startContainer(context.Background(), "abc")
@@ -162,7 +162,7 @@ func TestStartContainer_APIError(t *testing.T) {
 
 func TestStopContainer_Success(t *testing.T) {
 	ds := newDockerServer(t)
-	ds.on("POST", "/v1.41/containers/abc/stop", ds.replyNoContent())
+	ds.on("POST", "/containers/abc/stop", ds.replyNoContent())
 
 	err := testDockerClient(t, ds.srv.URL).stopContainer(context.Background(), "abc")
 	if err != nil {
@@ -174,7 +174,7 @@ func TestStopContainer_Success(t *testing.T) {
 
 func TestRemoveContainer_Success(t *testing.T) {
 	ds := newDockerServer(t)
-	ds.on("DELETE", "/v1.41/containers/abc", ds.replyNoContent())
+	ds.on("DELETE", "/containers/abc", ds.replyNoContent())
 
 	err := testDockerClient(t, ds.srv.URL).removeContainer(context.Background(), "abc")
 	if err != nil {
@@ -184,7 +184,7 @@ func TestRemoveContainer_Success(t *testing.T) {
 
 func TestRemoveContainer_APIError(t *testing.T) {
 	ds := newDockerServer(t)
-	ds.on("DELETE", "/v1.41/containers/abc",
+	ds.on("DELETE", "/containers/abc",
 		ds.replyJSON(http.StatusConflict, map[string]string{"message": "container is running"}))
 
 	err := testDockerClient(t, ds.srv.URL).removeContainer(context.Background(), "abc")
