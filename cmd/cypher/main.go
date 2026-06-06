@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -8,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -38,6 +40,9 @@ func main() {
 			return
 		case "setup":
 			runSetup(os.Args[2:])
+			return
+		case "store-llm-keys":
+			runStoreLLMKeys(os.Args[2:])
 			return
 		case "validate":
 			runValidate(os.Args[2:])
@@ -204,6 +209,88 @@ func runValidate(args []string) {
 	if errors > 0 {
 		os.Exit(1)
 	}
+}
+
+func runStoreLLMKeys(args []string) {
+	fs := flag.NewFlagSet("cypher store-llm-keys", flag.ExitOnError)
+	envPath := fs.String("env", ".env", "path to .env file to write op:// references into")
+	vault := fs.String("vault", "Private", "1Password vault name")
+	fs.Parse(args) //nolint:errcheck
+
+	ctx := context.Background()
+	op := &secrets.OnePassword{}
+
+	if err := op.Preflight(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "1Password not ready: %v\n  → run `op signin` first\n", err)
+		os.Exit(1)
+	}
+
+	type keySpec struct {
+		envVar string
+		title  string
+	}
+	keys := []keySpec{
+		{"GEMINI_API_KEY", "cypher-gemini-key"},
+		{"ANTHROPIC_API_KEY", "cypher-anthropic-key"},
+		{"OPENAI_API_KEY", "cypher-openai-key"},
+	}
+
+	fmt.Println("Storing LLM API keys in 1Password...")
+	fmt.Println("(Leave any prompt empty to skip that key.)")
+	fmt.Println()
+
+	updates := map[string]string{}
+	for _, k := range keys {
+		value, err := readSecret(fmt.Sprintf("  %s: ", k.envVar))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "\nread %s: %v\n", k.envVar, err)
+			os.Exit(1)
+		}
+		if value == "" {
+			fmt.Printf("  skipping %s\n", k.envVar)
+			continue
+		}
+		ref, err := op.Store(ctx, *vault, k.title, "credential", value)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "store %s in 1Password: %v\n", k.envVar, err)
+			os.Exit(1)
+		}
+		updates[k.envVar] = ref
+		fmt.Printf("  ✓ %s stored → %s\n", k.envVar, ref)
+	}
+
+	if len(updates) == 0 {
+		fmt.Println("\nNo keys stored.")
+		return
+	}
+
+	if err := setup.UpdateEnvFile(*envPath, updates); err != nil {
+		fmt.Fprintf(os.Stderr, "update %s: %v\n", *envPath, err)
+		os.Exit(1)
+	}
+	fmt.Printf("\n  ✓ %s updated with op:// references\n", *envPath)
+}
+
+// readSecret prints prompt to stderr, disables terminal echo, reads one line
+// from stdin, then re-enables echo. Falls back to plain input when stty is
+// unavailable (e.g. when stdin is not a TTY).
+func readSecret(prompt string) (string, error) {
+	fmt.Fprint(os.Stderr, prompt)
+
+	sttyOff := exec.Command("stty", "-echo")
+	sttyOff.Stdin = os.Stdin
+	sttyOff.Run() //nolint:errcheck — best-effort; plain input if stty unavailable
+
+	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Scan()
+	value := scanner.Text()
+
+	sttyOn := exec.Command("stty", "echo")
+	sttyOn.Stdin = os.Stdin
+	sttyOn.Run() //nolint:errcheck
+	fmt.Fprintln(os.Stderr) // newline after hidden input
+
+	return strings.TrimSpace(value), scanner.Err()
 }
 
 func runOrchestrator() {

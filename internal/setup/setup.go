@@ -440,6 +440,13 @@ func updateEnvFile(path string, updates map[string]string) error {
 	return os.WriteFile(path, []byte(content), 0o600)
 }
 
+// UpdateEnvFile writes or updates key=value pairs in the .env file at path,
+// preserving any existing entries that are not being overwritten. Exported for
+// use by other commands (e.g. store-llm-keys).
+func UpdateEnvFile(path string, updates map[string]string) error {
+	return updateEnvFile(path, updates)
+}
+
 // promptPEMStorage prints storage options to w and reads the user's choice from r.
 // Returns "1password" or "file". Defaults to "1password" on empty input.
 func promptPEMStorage(r io.Reader, w io.Writer) string {
