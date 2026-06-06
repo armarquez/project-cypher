@@ -17,14 +17,20 @@ const (
 	VendorAnthropic Vendor = "anthropic"
 	VendorOllama    Vendor = "ollama"
 	VendorOpenAI    Vendor = "openai"
+	// VendorLMStudio routes to an LM Studio server running an OpenAI-compatible
+	// API. Use model strings like "lmstudio/qwen2.5-coder:32b". No API key
+	// required; configure the endpoint via CYPHER_LMSTUDIO_URL.
+	VendorLMStudio Vendor = "lmstudio"
 )
 
 // defaultEndpoints maps each vendor to its public API base URL.
+// Override at runtime via CYPHER_OLLAMA_URL and CYPHER_LMSTUDIO_URL.
 var defaultEndpoints = map[Vendor]string{
 	VendorGemini:    "https://generativelanguage.googleapis.com",
 	VendorAnthropic: "https://api.anthropic.com",
 	VendorOllama:    "http://localhost:11434",
 	VendorOpenAI:    "https://api.openai.com",
+	VendorLMStudio:  "http://localhost:1234",
 }
 
 // hopByHopHeaders are connection-scoped headers that must not be forwarded.

@@ -213,62 +213,106 @@ func runValidate(args []string) {
 
 func runStoreLLMKeys(args []string) {
 	fs := flag.NewFlagSet("cypher store-llm-keys", flag.ExitOnError)
-	envPath := fs.String("env", ".env", "path to .env file to write op:// references into")
+	envPath := fs.String("env", ".env", "path to .env file")
 	vault := fs.String("vault", "Private", "1Password vault name")
 	fs.Parse(args) //nolint:errcheck
 
 	ctx := context.Background()
 	op := &secrets.OnePassword{}
 
+	// 1Password preflight — if unavailable we skip key storage but still
+	// configure endpoints (they're plain config values, not secrets).
+	opAvailable := true
 	if err := op.Preflight(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "1Password not ready: %v\n  → run `op signin` first\n", err)
-		os.Exit(1)
+		fmt.Fprintf(os.Stderr, "⚠ 1Password not available: %v\n  → API key storage will be skipped; run `op signin` to enable it\n\n", err)
+		opAvailable = false
 	}
 
+	updates := map[string]string{}
+
+	// --- Cloud API keys (stored in 1Password) ---
 	type keySpec struct {
 		envVar string
 		title  string
 	}
-	keys := []keySpec{
+	apiKeys := []keySpec{
 		{"GEMINI_API_KEY", "cypher-gemini-key"},
 		{"ANTHROPIC_API_KEY", "cypher-anthropic-key"},
 		{"OPENAI_API_KEY", "cypher-openai-key"},
 	}
 
-	fmt.Println("Storing LLM API keys in 1Password...")
-	fmt.Println("(Leave any prompt empty to skip that key.)")
-	fmt.Println()
+	if opAvailable {
+		fmt.Println("Cloud API keys (stored in 1Password — leave empty to skip):")
+		for _, k := range apiKeys {
+			value, err := readSecret(fmt.Sprintf("  %s: ", k.envVar))
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "\nread %s: %v\n", k.envVar, err)
+				os.Exit(1)
+			}
+			if value == "" {
+				fmt.Printf("  skipping %s\n", k.envVar)
+				continue
+			}
+			ref, err := op.Store(ctx, *vault, k.title, "credential", value)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "store %s: %v\n", k.envVar, err)
+				os.Exit(1)
+			}
+			updates[k.envVar] = ref
+			fmt.Printf("  ✓ stored → %s\n", ref)
+		}
+		fmt.Println()
+	}
 
-	updates := map[string]string{}
-	for _, k := range keys {
-		value, err := readSecret(fmt.Sprintf("  %s: ", k.envVar))
+	// --- Local LLM endpoints (plain config values written directly to .env) ---
+	type endpointSpec struct {
+		envVar     string
+		defaultVal string
+		label      string
+	}
+	endpoints := []endpointSpec{
+		{"CYPHER_OLLAMA_URL", "http://host.docker.internal:11434", "Ollama URL"},
+		{"CYPHER_LMSTUDIO_URL", "http://host.docker.internal:1234", "LM Studio URL"},
+	}
+
+	fmt.Println("Local LLM endpoints (press Enter to accept default):")
+	for _, e := range endpoints {
+		val, err := readInput(e.label, e.defaultVal)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "\nread %s: %v\n", k.envVar, err)
+			fmt.Fprintf(os.Stderr, "\nread %s: %v\n", e.envVar, err)
 			os.Exit(1)
 		}
-		if value == "" {
-			fmt.Printf("  skipping %s\n", k.envVar)
-			continue
-		}
-		ref, err := op.Store(ctx, *vault, k.title, "credential", value)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "store %s in 1Password: %v\n", k.envVar, err)
-			os.Exit(1)
-		}
-		updates[k.envVar] = ref
-		fmt.Printf("  ✓ %s stored → %s\n", k.envVar, ref)
+		updates[e.envVar] = val
+		fmt.Printf("  ✓ %s = %s\n", e.envVar, val)
 	}
 
 	if len(updates) == 0 {
-		fmt.Println("\nNo keys stored.")
+		fmt.Println("\nNothing to write.")
 		return
 	}
 
 	if err := setup.UpdateEnvFile(*envPath, updates); err != nil {
-		fmt.Fprintf(os.Stderr, "update %s: %v\n", *envPath, err)
+		fmt.Fprintf(os.Stderr, "\nupdate %s: %v\n", *envPath, err)
 		os.Exit(1)
 	}
-	fmt.Printf("\n  ✓ %s updated with op:// references\n", *envPath)
+	fmt.Printf("\n  ✓ %s updated\n", *envPath)
+}
+
+// readInput prints a prompt with an optional default value shown in brackets,
+// reads a line from stdin, and returns the default when input is empty.
+func readInput(prompt, defaultVal string) (string, error) {
+	if defaultVal != "" {
+		fmt.Fprintf(os.Stderr, "  %s [%s]: ", prompt, defaultVal)
+	} else {
+		fmt.Fprintf(os.Stderr, "  %s: ", prompt)
+	}
+	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Scan()
+	val := strings.TrimSpace(scanner.Text())
+	if val == "" {
+		return defaultVal, scanner.Err()
+	}
+	return val, scanner.Err()
 }
 
 // readSecret prints prompt to stderr, disables terminal echo, reads one line
@@ -331,7 +375,18 @@ func runOrchestrator() {
 		os.Exit(1)
 	}
 	creds := gateway.NewCredentialStore(credKeys)
-	router := gateway.NewRouter(http.DefaultClient, nil, creds)
+
+	// Allow operators to override default LLM endpoints for local models.
+	// CYPHER_OLLAMA_URL and CYPHER_LMSTUDIO_URL are plain config values (not
+	// secrets) written to .env by "just store-llm-keys".
+	endpointOverrides := map[gateway.Vendor]string{}
+	if u := os.Getenv("CYPHER_OLLAMA_URL"); u != "" {
+		endpointOverrides[gateway.VendorOllama] = u
+	}
+	if u := os.Getenv("CYPHER_LMSTUDIO_URL"); u != "" {
+		endpointOverrides[gateway.VendorLMStudio] = u
+	}
+	router := gateway.NewRouter(http.DefaultClient, endpointOverrides, creds)
 
 	var webhookSrv *gateway.WebhookServer
 	webhookSecret, err := secrets.ResolveEnv(ctx, "CYPHER_GH_WEBHOOK_SECRET")

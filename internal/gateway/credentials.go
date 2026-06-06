@@ -62,7 +62,7 @@ func (cs *CredentialStore) Inject(vendor Vendor, h http.Header) {
 		if h.Get("anthropic-version") == "" {
 			h.Set("anthropic-version", "2023-06-01")
 		}
-	case VendorOpenAI:
+	case VendorOpenAI, VendorLMStudio:
 		if key != "" {
 			h.Set("Authorization", "Bearer "+key)
 		}
