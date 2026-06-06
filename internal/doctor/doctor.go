@@ -22,8 +22,9 @@ import (
 type Result struct {
 	Name   string
 	Pass   bool
+	Warn   bool   // advisory: shown with ⚠ but does not count as a failure
 	Detail string // shown on pass: e.g. "user: armarquez"
-	Fix    string // shown on fail: actionable remediation hint
+	Fix    string // shown on fail/warn: actionable remediation hint
 }
 
 // Config holds all inputs the doctor needs to run its checks.
@@ -90,7 +91,34 @@ func Run(ctx context.Context, cfg Config) []Result {
 	results = append(results, CheckSecrets(ctx, secretVars, v)...)
 
 	results = append(results, CheckPEMFile()...)
+	results = append(results, CheckLLMKeys()...)
 
+	return results
+}
+
+// CheckLLMKeys warns when LLM API keys needed by the orchestrator are absent.
+// Missing keys are advisory (Warn=true): they don't block the doctor exit code
+// but signal that workers or architect-tier guardrails will be non-functional.
+func CheckLLMKeys() []Result {
+	var results []Result
+	if os.Getenv("GEMINI_API_KEY") == "" {
+		results = append(results, Result{
+			Name: "GEMINI_API_KEY set",
+			Warn: true,
+			Fix:  "worker LLM calls will fail — set GEMINI_API_KEY in .env",
+		})
+	} else {
+		results = append(results, Result{Name: "GEMINI_API_KEY set", Pass: true})
+	}
+	if os.Getenv("ANTHROPIC_API_KEY") == "" {
+		results = append(results, Result{
+			Name: "ANTHROPIC_API_KEY set",
+			Warn: true,
+			Fix:  "architect guardrails (oss_adoption, docs, security) will be inactive",
+		})
+	} else {
+		results = append(results, Result{Name: "ANTHROPIC_API_KEY set", Pass: true})
+	}
 	return results
 }
 

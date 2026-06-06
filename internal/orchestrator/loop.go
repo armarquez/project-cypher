@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -21,11 +22,17 @@ type WorkerSession interface {
 	Destroy(ctx context.Context) error
 }
 
+// ErrNoWork is returned by RunOnce when there are open issues but none have a
+// workable state (all already have a branch in progress). The run-loop uses
+// this sentinel to stop when the queue is drained.
+var ErrNoWork = errors.New("no workable cypher issues")
+
 // ghClient is the subset of github.Client the orchestrator uses.
 // The same concrete *github.Client satisfies both this interface and the
 // unexported hitl.githubClient interface used by hitl.NewGate.
 type ghClient interface {
 	ListOpenIssues(ctx context.Context, owner, repo, label string) ([]github.Task, error)
+	BranchExists(ctx context.Context, owner, repo, branch string) (bool, error)
 	GetDefaultBranchSHA(ctx context.Context, owner, repo, branch string) (string, error)
 	CreateBranch(ctx context.Context, owner, repo, branch, baseSHA string) error
 	PostComment(ctx context.Context, owner, repo string, number int, body string) error
@@ -119,18 +126,30 @@ func (o *Orchestrator) WithBundles(bundles map[string]*skills.Bundle) *Orchestra
 	return o
 }
 
-// RunOnce fetches open issues labelled "cypher" and processes the oldest one.
-// In a production loop, RunOnce is called repeatedly on a timer.
+// RunOnce fetches open issues labelled "cypher" and processes the first one
+// that does not already have a branch in progress. Returns ErrNoWork when all
+// issues are already in flight (or there are no open issues). In run-loop mode
+// the caller uses ErrNoWork as the stop signal.
 func (o *Orchestrator) RunOnce(ctx context.Context) error {
 	tasks, err := o.gh.ListOpenIssues(ctx, o.owner, o.repo, "cypher")
 	if err != nil {
 		return fmt.Errorf("list issues: %w", err)
 	}
-	if len(tasks) == 0 {
-		o.log.InfoContext(ctx, "no open issues labelled cypher")
-		return nil
+	for _, task := range tasks {
+		branch := issueBranch(task)
+		exists, err := o.gh.BranchExists(ctx, o.owner, o.repo, branch)
+		if err != nil {
+			return fmt.Errorf("check branch: %w", err)
+		}
+		if exists {
+			o.log.InfoContext(ctx, "skipping issue: branch already exists",
+				"issue", task.IssueNumber, "branch", branch)
+			continue
+		}
+		return o.runTask(ctx, task)
 	}
-	return o.runTask(ctx, tasks[0])
+	o.log.InfoContext(ctx, "no workable cypher issues")
+	return ErrNoWork
 }
 
 func (o *Orchestrator) runTask(ctx context.Context, task github.Task) error {

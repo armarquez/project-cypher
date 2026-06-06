@@ -17,16 +17,21 @@ import (
 // --- test doubles ---
 
 type fakeGH struct {
-	tasks       []github.Task
-	listErr     error
-	sha         string
-	shaErr      error
-	branchErr   error
-	lastHITLReq github.HITLRequest
+	tasks          []github.Task
+	listErr        error
+	sha            string
+	shaErr         error
+	branchErr      error
+	branchExists   bool
+	branchExistsErr error
+	lastHITLReq    github.HITLRequest
 }
 
 func (f *fakeGH) ListOpenIssues(_ context.Context, _, _, _ string) ([]github.Task, error) {
 	return f.tasks, f.listErr
+}
+func (f *fakeGH) BranchExists(_ context.Context, _, _, _ string) (bool, error) {
+	return f.branchExists, f.branchExistsErr
 }
 func (f *fakeGH) GetDefaultBranchSHA(_ context.Context, _, _, _ string) (string, error) {
 	return f.sha, f.shaErr
@@ -234,8 +239,68 @@ func TestBuildPrompt_NoDesignConstraints(t *testing.T) {
 func TestRunOnce_NoIssues(t *testing.T) {
 	gh := &fakeGH{}
 	orch := testOrch(gh, &fakeSessionCreator{sess: &fakeSession{}}, &fakeOH{})
+	if err := orch.RunOnce(context.Background()); !errors.Is(err, ErrNoWork) {
+		t.Fatalf("expected ErrNoWork with no issues, got: %v", err)
+	}
+}
+
+func TestRunOnce_AllBranchesExist_ReturnsErrNoWork(t *testing.T) {
+	gh := &fakeGH{
+		tasks: []github.Task{
+			{IssueNumber: 1, Title: "First"},
+			{IssueNumber: 2, Title: "Second"},
+		},
+		branchExists: true, // both branches already exist
+	}
+	orch := testOrch(gh, &fakeSessionCreator{sess: &fakeSession{}}, &fakeOH{})
+	if err := orch.RunOnce(context.Background()); !errors.Is(err, ErrNoWork) {
+		t.Fatalf("expected ErrNoWork when all branches exist, got: %v", err)
+	}
+}
+
+// seqGH is a ghClient whose BranchExists returns values from a sequence,
+// advancing on each call. All other methods delegate to an embedded fakeGH.
+type seqGH struct {
+	fakeGH
+	existsSeq []bool
+	seqIdx    int
+}
+
+func (s *seqGH) BranchExists(_ context.Context, _, _, _ string) (bool, error) {
+	if s.seqIdx < len(s.existsSeq) {
+		v := s.existsSeq[s.seqIdx]
+		s.seqIdx++
+		return v, nil
+	}
+	return false, nil
+}
+
+func TestRunOnce_SkipsExistingBranch_ProcessesNext(t *testing.T) {
+	sess := &fakeSession{}
+	gh := &seqGH{
+		fakeGH: fakeGH{
+			tasks: []github.Task{
+				{IssueNumber: 10, Title: "In progress"},
+				{IssueNumber: 11, Title: "Ready"},
+			},
+			sha: "sha",
+		},
+		existsSeq: []bool{true, false}, // first branch exists, second doesn't
+	}
+	oh := &fakeOH{
+		convID:   "conv-skip",
+		statuses: []session.ConversationStatus{session.StatusFinished},
+	}
+	orch := New("o", "r", testCfg(), gh,
+		&fakeSessionCreator{sess: sess},
+		func() OHClient { return oh },
+		time.Millisecond, nil)
+
 	if err := orch.RunOnce(context.Background()); err != nil {
-		t.Fatalf("unexpected error with no issues: %v", err)
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !sess.destroyed {
+		t.Error("second issue should have been processed and session destroyed")
 	}
 }
 

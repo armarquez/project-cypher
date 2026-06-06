@@ -64,6 +64,42 @@ func TestGetDefaultBranchSHA_EmptySHA(t *testing.T) {
 	}
 }
 
+// --- BranchExists ---
+
+func TestBranchExists_Exists(t *testing.T) {
+	srv, _ := apiServer(t, "/repos/o/r/git/ref/heads/feat/my-branch", http.StatusOK,
+		map[string]any{"ref": "refs/heads/feat/my-branch"})
+
+	exists, err := testClient(t, srv.URL).BranchExists(context.Background(), "o", "r", "feat/my-branch")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !exists {
+		t.Error("expected exists=true for 200 response")
+	}
+}
+
+func TestBranchExists_NotFound(t *testing.T) {
+	srv, _ := apiServer(t, "", http.StatusNotFound, map[string]string{"message": "Not Found"})
+
+	exists, err := testClient(t, srv.URL).BranchExists(context.Background(), "o", "r", "feat/missing")
+	if err != nil {
+		t.Fatalf("unexpected error for 404: %v", err)
+	}
+	if exists {
+		t.Error("expected exists=false for 404 response")
+	}
+}
+
+func TestBranchExists_APIError(t *testing.T) {
+	srv, _ := apiServer(t, "", http.StatusInternalServerError, map[string]string{"message": "server error"})
+
+	_, err := testClient(t, srv.URL).BranchExists(context.Background(), "o", "r", "feat/any")
+	if err == nil {
+		t.Error("expected error for 500 response")
+	}
+}
+
 // --- CreateBranch ---
 
 func TestCreateBranch_SendsCorrectPayload(t *testing.T) {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -75,15 +76,22 @@ func runDoctor(args []string) {
 	fmt.Println()
 
 	results := doctor.Run(context.Background(), cfg)
-	failed := 0
+	failed, warned := 0, 0
 	for _, r := range results {
-		if r.Pass {
+		switch {
+		case r.Pass:
 			if r.Detail != "" {
 				fmt.Printf("  ✓ %s (%s)\n", r.Name, r.Detail)
 			} else {
 				fmt.Printf("  ✓ %s\n", r.Name)
 			}
-		} else {
+		case r.Warn:
+			fmt.Printf("  ⚠ %s\n", r.Name)
+			if r.Fix != "" {
+				fmt.Printf("    → %s\n", r.Fix)
+			}
+			warned++
+		default:
 			fmt.Printf("  ✗ %s\n", r.Name)
 			if r.Fix != "" {
 				fmt.Printf("    → %s\n", r.Fix)
@@ -97,7 +105,11 @@ func runDoctor(args []string) {
 		fmt.Printf("%d check(s) failed.\n", failed)
 		os.Exit(1)
 	}
-	fmt.Println("All checks passed.")
+	if warned > 0 {
+		fmt.Printf("%d warning(s).\n", warned)
+	} else {
+		fmt.Println("All checks passed.")
+	}
 }
 
 func runSetup(args []string) {
@@ -327,14 +339,19 @@ func runOrchestrator() {
 	if *loop {
 		log.Info("starting orchestrator loop", "owner", owner, "repo", repo, "poll", *pollSecs)
 		for {
-			if err := orch.RunOnce(ctx); err != nil {
+			err := orch.RunOnce(ctx)
+			if errors.Is(err, orchestrator.ErrNoWork) {
+				log.Info("queue empty — no workable cypher issues, stopping")
+				break
+			}
+			if err != nil {
 				log.Error("run once failed", "err", err)
 			}
 			time.Sleep(time.Duration(*pollSecs) * time.Second)
 		}
 	} else {
 		log.Info("running orchestrator once", "owner", owner, "repo", repo)
-		if err := orch.RunOnce(ctx); err != nil {
+		if err := orch.RunOnce(ctx); err != nil && !errors.Is(err, orchestrator.ErrNoWork) {
 			log.Error("run failed", "err", err)
 			os.Exit(1)
 		}

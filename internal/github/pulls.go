@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 // PR represents a GitHub pull request.
@@ -38,6 +39,19 @@ func (c *Client) GetDefaultBranchSHA(ctx context.Context, owner, repo, branch st
 		return "", fmt.Errorf("empty SHA returned for %s/%s@%s", owner, repo, branch)
 	}
 	return result.Object.SHA, nil
+}
+
+// BranchExists reports whether branch already exists in owner/repo.
+// Returns (false, nil) when the branch is not found; propagates other errors.
+func (c *Client) BranchExists(ctx context.Context, owner, repo, branch string) (bool, error) {
+	path := fmt.Sprintf("/repos/%s/%s/git/ref/heads/%s", owner, repo, branch)
+	if err := c.do(ctx, path, nil); err != nil {
+		if strings.Contains(err.Error(), " 404 ") {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 // CreateBranch creates a new branch in owner/repo pointing at baseSHA.
