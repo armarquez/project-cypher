@@ -417,6 +417,37 @@ func TestCheckPEMFile_Set(t *testing.T) {
 	}
 }
 
+// --- CheckLLMKeys ---
+
+func TestCheckLLMKeys_BothSet(t *testing.T) {
+	t.Setenv("GEMINI_API_KEY", "gk-test")
+	t.Setenv("ANTHROPIC_API_KEY", "ak-test")
+	results := CheckLLMKeys()
+	if !pass(results, "GEMINI_API_KEY set") {
+		t.Error("expected GEMINI_API_KEY to pass when set")
+	}
+	if !pass(results, "ANTHROPIC_API_KEY set") {
+		t.Error("expected ANTHROPIC_API_KEY to pass when set")
+	}
+}
+
+func TestCheckLLMKeys_BothAbsent(t *testing.T) {
+	t.Setenv("GEMINI_API_KEY", "")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	results := CheckLLMKeys()
+	for _, r := range results {
+		if r.Pass {
+			t.Errorf("expected %q to warn when unset, got Pass=true", r.Name)
+		}
+		if !r.Warn {
+			t.Errorf("expected %q to have Warn=true when unset", r.Name)
+		}
+		if r.Fix == "" {
+			t.Errorf("expected Fix hint for %q", r.Name)
+		}
+	}
+}
+
 // --- CheckAppCredentials ---
 
 func generateDocTestPEM(t *testing.T) []byte {
