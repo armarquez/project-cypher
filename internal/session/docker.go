@@ -110,7 +110,7 @@ func (d *dockerClient) createContainer(ctx context.Context, cfg ContainerConfig)
 		},
 	}
 	var resp createContainerResponse
-	if err := d.do(ctx, http.MethodPost, "/v1.41/containers/create", body, &resp); err != nil {
+	if err := d.do(ctx, http.MethodPost, "/containers/create", body, &resp); err != nil {
 		return "", fmt.Errorf("create container: %w", err)
 	}
 	if resp.ID == "" {
@@ -120,7 +120,7 @@ func (d *dockerClient) createContainer(ctx context.Context, cfg ContainerConfig)
 }
 
 func (d *dockerClient) startContainer(ctx context.Context, id string) error {
-	path := "/v1.41/containers/" + id + "/start"
+	path := "/containers/" + id + "/start"
 	if err := d.do(ctx, http.MethodPost, path, nil, nil); err != nil {
 		return fmt.Errorf("start container %s: %w", id, err)
 	}
@@ -128,7 +128,7 @@ func (d *dockerClient) startContainer(ctx context.Context, id string) error {
 }
 
 func (d *dockerClient) stopContainer(ctx context.Context, id string) error {
-	path := "/v1.41/containers/" + id + "/stop?t=10"
+	path := "/containers/" + id + "/stop?t=10"
 	if err := d.do(ctx, http.MethodPost, path, nil, nil); err != nil {
 		return fmt.Errorf("stop container %s: %w", id, err)
 	}
@@ -137,7 +137,7 @@ func (d *dockerClient) stopContainer(ctx context.Context, id string) error {
 
 // removeContainer force-removes the container (stops it first if running).
 func (d *dockerClient) removeContainer(ctx context.Context, id string) error {
-	path := "/v1.41/containers/" + id + "?force=true"
+	path := "/containers/" + id + "?force=true"
 	if err := d.do(ctx, http.MethodDelete, path, nil, nil); err != nil {
 		return fmt.Errorf("remove container %s: %w", id, err)
 	}
