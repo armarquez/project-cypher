@@ -63,6 +63,8 @@ func Run(ctx context.Context, cfg Config) []Result {
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 	secretVars := append([]string(nil), knownSecretVars...)
 
+	results = append(results, CheckClockSkew(ctx, httpClient, "https://api.github.com"))
+
 	if appIDStr != "" || installIDStr != "" || pemRaw != "" {
 		// App credentials present — validate them.
 		results = append(results, CheckAppCredentials(ctx, httpClient, "https://api.github.com", appIDStr, installIDStr, pemRaw)...)
@@ -90,6 +92,41 @@ func Run(ctx context.Context, cfg Config) []Result {
 	results = append(results, CheckPEMFile()...)
 
 	return results
+}
+
+// CheckClockSkew compares local time against the server's Date header. A skew
+// greater than 2 minutes will cause GitHub App JWT authentication to fail.
+func CheckClockSkew(ctx context.Context, client *http.Client, apiBase string) Result {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiBase+"/zen", nil)
+	if err != nil {
+		return Result{Name: "system clock in sync", Pass: true} // skip if we can't build the request
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return Result{Name: "system clock in sync", Pass: true} // skip if GitHub is unreachable
+	}
+	resp.Body.Close()
+
+	serverDate := resp.Header.Get("Date")
+	if serverDate == "" {
+		return Result{Name: "system clock in sync", Pass: true}
+	}
+	serverTime, err := http.ParseTime(serverDate)
+	if err != nil {
+		return Result{Name: "system clock in sync", Pass: true}
+	}
+	skew := time.Since(serverTime)
+	if skew < 0 {
+		skew = -skew
+	}
+	if skew > 2*time.Minute {
+		return Result{
+			Name: "system clock in sync",
+			Pass: false,
+			Fix:  fmt.Sprintf("clock is %.0f seconds off from GitHub — GitHub App JWTs will be rejected; run: just sync-clock", skew.Seconds()),
+		}
+	}
+	return Result{Name: "system clock in sync", Pass: true, Detail: fmt.Sprintf("skew %.1fs", skew.Seconds())}
 }
 
 // CheckAppCredentials validates the three GitHub App credential env vars and

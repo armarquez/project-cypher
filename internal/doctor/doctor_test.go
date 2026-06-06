@@ -275,6 +275,36 @@ func TestCheckDocker_ImageUnexpectedStatus(t *testing.T) {
 	}
 }
 
+// --- CheckClockSkew ---
+
+func TestCheckClockSkew_InSync(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Date", time.Now().UTC().Format(http.TimeFormat))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer s.Close()
+	r := CheckClockSkew(context.Background(), s.Client(), s.URL)
+	if !r.Pass {
+		t.Errorf("expected pass for synced clock, got: %s", r.Fix)
+	}
+}
+
+func TestCheckClockSkew_Skewed(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Report server time 5 minutes behind local time (simulates local clock ahead).
+		w.Header().Set("Date", time.Now().Add(-5*time.Minute).UTC().Format(http.TimeFormat))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer s.Close()
+	r := CheckClockSkew(context.Background(), s.Client(), s.URL)
+	if r.Pass {
+		t.Error("expected fail for skewed clock")
+	}
+	if !strings.Contains(r.Fix, "sync-clock") {
+		t.Errorf("expected sync-clock hint in fix, got: %s", r.Fix)
+	}
+}
+
 // --- CheckOpenHands ---
 
 func TestCheckOpenHands_Responding(t *testing.T) {

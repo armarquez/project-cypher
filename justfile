@@ -42,10 +42,15 @@ coverage:
 
 app_name := ""
 
+# Sync the WSL2 system clock from GitHub's server time (fixes JWT auth after host sleep/wake)
+sync-clock:
+    sudo date -s "$(curl -sI https://api.github.com | grep -i '^date:' | cut -d' ' -f2-)"
+
 # PEM_STORAGE: "1password" (default) or "file"; OP_VAULT: vault name (default: "Private")
 # To use a custom app name: just app_name="cypher-owner-repo-2" setup
-# Bootstrap a new environment: provision GitHub App credentials and pull the worker image
+# Bootstrap a new environment: sync clock, provision GitHub App credentials, pull worker image
 setup CONFIG="configs/project-cypher.yaml" PEM_STORAGE="1password" OP_VAULT="Private":
+    just sync-clock
     just provision CONFIG={{CONFIG}} PEM_STORAGE={{PEM_STORAGE}} OP_VAULT={{OP_VAULT}}
     just pull
 

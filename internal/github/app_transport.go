@@ -72,7 +72,11 @@ func (t *InstallationTransport) refreshToken(ctx context.Context) (string, error
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusCreated {
-		return "", fmt.Errorf("GitHub returned %d fetching installation token", resp.StatusCode)
+		var errBody struct {
+			Message string `json:"message"`
+		}
+		json.NewDecoder(resp.Body).Decode(&errBody) //nolint:errcheck
+		return "", fmt.Errorf("GitHub returned %d fetching installation token: %s", resp.StatusCode, errBody.Message)
 	}
 
 	var body struct {
@@ -106,7 +110,8 @@ func makeAppJWT(appID int64, pemData []byte) (string, error) {
 	now := time.Now()
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
 		"iat": now.Add(-60 * time.Second).Unix(),
-		"exp": now.Add(10 * time.Minute).Unix(),
+		// 8 minutes (GitHub max is 10) leaves a 2-minute buffer for WSL2 clock drift.
+		"exp": now.Add(8 * time.Minute).Unix(),
 		"iss": fmt.Sprintf("%d", appID),
 	})
 	signed, err := token.SignedString(key)
