@@ -54,6 +54,10 @@ setup CONFIG="configs/project-cypher.yaml" PEM_STORAGE="1password" OP_VAULT="Pri
     just provision CONFIG={{CONFIG}} PEM_STORAGE={{PEM_STORAGE}} OP_VAULT={{OP_VAULT}}
     just pull
 
+# Store LLM API keys (Gemini, Anthropic, OpenAI) in 1Password and write op:// refs to .env
+store-llm-keys OP_VAULT="Private":
+    go run ./cmd/cypher store-llm-keys --vault {{OP_VAULT}}
+
 # PEM_STORAGE: "1password" (default) or "file"; OP_VAULT: vault name (default: "Private")
 # To use a custom app name: just app_name="cypher-owner-repo-2" provision
 # Provision a GitHub App and write credentials to .env (interactive — opens browser)
