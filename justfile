@@ -54,7 +54,7 @@ setup CONFIG="configs/project-cypher.yaml" PEM_STORAGE="1password" OP_VAULT="Pri
     just provision CONFIG={{CONFIG}} PEM_STORAGE={{PEM_STORAGE}} OP_VAULT={{OP_VAULT}}
     just pull
 
-# Store LLM API keys (Gemini, Anthropic, OpenAI) in 1Password and write op:// refs to .env
+# Configure LLM backends: store cloud API keys in 1Password and set local LLM endpoint URLs in .env
 store-llm-keys OP_VAULT="Private":
     go run ./cmd/cypher store-llm-keys --vault {{OP_VAULT}}
 
